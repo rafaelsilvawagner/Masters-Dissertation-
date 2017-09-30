@@ -1,0 +1,128 @@
+library(GetHFData)
+library(dplyr)
+library(lubridate)
+library(chron)
+
+#define the inputs for the assets
+assets="VALE5"
+time="5 min"
+contents<-ghfd_get_ftp_contents(type.market="equity")
+last.date<-tail(contents$dates,1)
+#define o número de períodos para as variaveis acumuladas
+k<-5
+
+#Get trades data by raw
+trades_raw<-ghfd_get_HF_data(my.assets=assets,type.market="equity",type.data="trades",
+                             first.date=last.date,last.date=last.date,type.output="raw",
+                             first.time ="09:00:00",last.time ="18:00:00" )
+
+
+#Get trades data aggregated
+trades_agg<-ghfd_get_HF_data(my.assets=assets,type.market="equity",type.data="trades",
+                         first.date=last.date,last.date=last.date,type.output="agg",agg.diff=time,
+                         first.time ="09:00:00",last.time ="18:00:00" )
+
+#transform the dates in trades_raw
+trades_raw$Tradetime<-chron(times=trades_raw$Tradetime)
+trades_agg$Tradetime<-chron(times=trades_agg$Tradetime)
+
+#make some new variables
+#make  vol buy
+trades_agg[,ncol(trades_agg)+1]=integer()
+names(trades_agg)[ncol(trades_agg)]<-"vol.buy"
+
+for (i in 1:(nrow(trades_agg))){
+  trades_agg[i,ncol(trades_agg)]<-sum(subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[i] & 
+                                         Tradetime<trades_agg$Tradetime[i+1])["TradedQuantity"])
+}
+trades_agg[nrow(trades_agg),ncol(trades_agg)]<-0
+
+#make vol sell
+trades_agg[,ncol(trades_agg)+1]=integer()
+names(trades_agg)[ncol(trades_agg)]<-"vol.sell"
+
+for (i in 1:(nrow(trades_agg))){
+  trades_agg[i,ncol(trades_agg)]<-sum(subset(trades_raw, TradeSign==-1 & Tradetime>trades_agg$Tradetime[i] & 
+                                               Tradetime<trades_agg$Tradetime[i+1])["TradedQuantity"])
+}
+trades_agg[nrow(trades_agg),ncol(trades_agg)]<-0
+
+#make vwap buy
+trades_agg[,ncol(trades_agg)+1]=integer()
+names(trades_agg)[ncol(trades_agg)]<-"vwap.buy"
+
+for (i in 1:(nrow(trades_agg))){
+  trades_agg[i,ncol(trades_agg)]<-sum(subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[i] & 
+                                               Tradetime<trades_agg$Tradetime[i+1])["TradedQuantity"]*
+                                        subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[i] & 
+                                                 Tradetime<trades_agg$Tradetime[i+1])["TradePrice"])
+}
+trades_agg[nrow(trades_agg),ncol(trades_agg)]<-0
+
+#make vwap sell
+trades_agg[,ncol(trades_agg)+1]=integer()
+names(trades_agg)[ncol(trades_agg)]<-"vwap.sell"
+
+for (i in 1:(nrow(trades_agg))){
+  trades_agg[i,ncol(trades_agg)]<-sum(subset(trades_raw, TradeSign==-1 & Tradetime>trades_agg$Tradetime[i] & 
+                                               Tradetime<trades_agg$Tradetime[i+1])["TradedQuantity"]*
+                                        subset(trades_raw, TradeSign==-1 & Tradetime>trades_agg$Tradetime[i] & 
+                                                 Tradetime<trades_agg$Tradetime[i+1])["TradePrice"])
+}
+trades_agg[nrow(trades_agg),ncol(trades_agg)]<-0
+
+dataset_trades<-trades_agg
+#get BOOK !!!!
+
+
+#Get trades data by raw
+book_raw<-ghfd_get_HF_data(my.assets=assets,type.market="equity",type.data="orders",
+                             first.date=last.date,last.date=last.date,type.output="raw",
+                             first.time ="09:00:00",last.time ="18:00:00" )
+
+
+#Get trades data aggregated
+book_agg<-ghfd_get_HF_data(my.assets=assets,type.market="equity",type.data="orders",
+                             first.date=last.date,last.date=last.date,type.output="agg",agg.diff=time,
+                             first.time ="09:00:00",last.time ="18:00:00" )
+
+
+dataset_book<-book_agg
+dataset_book_raw<-book_raw
+
+
+#order book_agg
+#i will make some transformation in the data for later aggregating
+dataset_book<-cbind(dataset_book[1:(nrow(dataset_book)/2),],
+                    dataset_book[((nrow(dataset_book)/2)+1):nrow(dataset_book),])
+dataset_book<-dataset_book[,c(1,2,3,4,5,6,7,9,10,11,15,16,17,18,20,21,22)]
+names(dataset_book)[4:17]<-c("n.order.buy", "avg.order.price.buy","max.order.price.buy",
+                             "min.order.price.buy","n.new.order.buy","n.update.order.buy",
+                             "n.cancelled.order.buy",
+                             "n.order.sell", "avg.order.price.sell","max.order.price.sell",
+                             "min.order.price.sell","n.new.order.sell","n.update.order.sell",
+                             "n.cancelled.order.sell")
+
+date_trades<-dataset_trades$Tradetime
+date_book<-dataset_book$OrderDatetime
+date_book<-format(strptime(date_book,"%Y-%m-%d %H:%M:%S"),'%H:%M:%S')
+date_book<-chron(times=date_book)
+
+index<-match(date_trades,date_book)
+dataset_book<-dataset_book[index,]
+
+#trasform the format of times in raw
+dataset_book_raw$PriorityTime
+dataset_book_raw$PriorityTime<-chron(times=dataset_book_raw$PriorityTime)
+
+#MAKE SOME NEW VARIABLES
+dataset_book[,ncol(dataset_book)+1]=integer()
+names(dataset_book)[ncol(dataset_book)]<-"vol.buy"
+
+for (i in 1:(nrow(trades_agg))){
+  trades_agg[i,ncol(trades_agg)]<-sum(subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[i] & 
+                                               Tradetime<trades_agg$Tradetime[i+1])["TradedQuantity"])
+}
+trades_agg[nrow(trades_agg),ncol(trades_agg)]<-0
+
+
