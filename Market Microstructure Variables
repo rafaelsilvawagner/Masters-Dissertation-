@@ -1,7 +1,12 @@
 library(GetHFData)
+library(plyr)
 library(dplyr)
 library(lubridate)
 library(chron)
+library(orderbook)
+library(obAnalytics)
+library(tictoc)
+library(data.table)
 
 #define the inputs for the assets
 assets="VALE5"
@@ -90,6 +95,48 @@ book_agg<-ghfd_get_HF_data(my.assets=assets,type.market="equity",type.data="orde
 dataset_book<-book_agg
 dataset_book_raw<-book_raw
 
+############### CRIANDO ############################
+
+
+levels(dataset_book_raw$OrderSide)[levels(dataset_book_raw$OrderSide)=="Buy"] <- "bid"
+levels(dataset_book_raw$OrderSide)[levels(dataset_book_raw$OrderSide)=="Sell"] <- "ask"
+
+
+levels(dataset_book_raw$ExecutionType)[levels(dataset_book_raw$ExecutionType)=="Cancel"] <- "deleted"
+levels(dataset_book_raw$ExecutionType)[levels(dataset_book_raw$ExecutionType)=="Reentry"] <- "changed"
+levels(dataset_book_raw$ExecutionType)[levels(dataset_book_raw$ExecutionType)=="Update"] <- "changed"
+levels(dataset_book_raw$ExecutionType)[levels(dataset_book_raw$ExecutionType)=="New"] <- "created"
+levels(dataset_book_raw$ExecutionType)[levels(dataset_book_raw$ExecutionType)=="Trade"] <- "changed"
+options(digits.secs=3)
+
+dataset_book_raw$PriorityDateTime<-as.numeric(force_tz(dataset_book_raw$PriorityDateTime, tzone = "UTC"))*1000
+
+80981240453
+
+subset(dataset_book_raw, SequentialOrderNumber==80981240453)
+
+load_txt<-dataset_book_raw[c(4,16,16,9,16,6,3)]
+#head(load_txt)
+names(load_txt)<-c("id","timestamp","exchange.timestamp","price","volume","action","direction")
+write.csv(load_txt,"C://Users//rwagn//Documents//Dissertacao de Mestrado//load_txt.csv")
+
+tic()
+ob_data<-processData("C://Users//rwagn//Documents//Dissertacao de Mestrado//load_txt.csv")
+toc()
+
+#exemplo do pacote 
+csv.file <- system.file("extdata", "orders.csv.xz", package="obAnalytics")
+lob.data <- processData(csv.file)
+
+
+
+####################### FIM DA CRIAÇÃO
+
+dataset_book_raw[,ncol(dataset_book_raw)+1]=integer()
+names(dataset_book_raw)[ncol(dataset_book_raw)]<-"Available_Quantity"
+dataset_book_raw$Available_Quantity=dataset_book_raw$TotalQuantity-dataset_book_raw$TradedQuantity
+
+
 
 #order book_agg
 #i will make some transformation in the data for later aggregating
@@ -117,12 +164,12 @@ dataset_book_raw$PriorityTime<-chron(times=dataset_book_raw$PriorityTime)
 
 #MAKE SOME NEW VARIABLES
 dataset_book[,ncol(dataset_book)+1]=integer()
-names(dataset_book)[ncol(dataset_book)]<-"vol.buy"
+names(dataset_book)[ncol(dataset_book)]<-"Depth 3 Levels"
 
-for (i in 1:(nrow(trades_agg))){
-  trades_agg[i,ncol(trades_agg)]<-sum(subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[i] & 
-                                               Tradetime<trades_agg$Tradetime[i+1])["TradedQuantity"])
-}
 trades_agg[nrow(trades_agg),ncol(trades_agg)]<-0
+
+#recreate the lob 
+?processData
+
 
 
