@@ -3,11 +3,10 @@ library(plyr)
 library(dplyr)
 library(lubridate)
 library(chron)
-library(orderbook)
-library(obAnalytics)
 library(tictoc)
 library(data.table)
 library(zoo)
+library(SDMTools)
 
 #define the inputs for the assets
 #define that i want the stock VALE 5 in a dataframe separated by 5 minutes
@@ -109,156 +108,81 @@ for (round_asset in 1:number_assets) {
     ############################################
     ####Preenche aquelas variáveis que já existiam
     ############################################
-    #numero de negócios
+   
+     #numero de negócios
     for (i in 2:nrow(trades_agg)){
       if(nrow(subset(trades_agg_1sec,TradeDateTime<=trades_agg$TradeDateTime[i] &
-      TradeDateTime>trades_agg$TradeDateTime[i-1])["n.trades"])>0){
+      TradeDateTime>trades_agg$TradeDateTime[i-1]))>0){
         sub<-subset(trades_agg_1sec,TradeDateTime<=trades_agg$TradeDateTime[i] &
                      TradeDateTime>trades_agg$TradeDateTime[i-1])
         trades_agg$n.trades[i]<-sum(sub$n.trades)
         trades_agg$n.buys[i]<-sum(sub$n.buys)
         trades_agg$n.sells[i]<-sum(sub$n.sells)
-        trades_agg$sum.qtd[i]<-sum(sub$n.qtd)
-        trades_agg$sum.vol[i]<-sum(sub$n.vol)
-        trades_agg$last.price[i]<-last(sub$last.price)
+        trades_agg$sum.qtd[i]<-sum(sub$sum.qtd)
+        trades_agg$sum.vol[i]<-sum(sub$sum.vol)
+        trades_agg$last.price[i]<-sum(sub$last.price)
         }
     }
     
+    #cria o preço ponderado
+    trades_agg$weighted.price<-trades_agg$sum.vol/trades_agg$sum.qtd
+    trades_agg$weighted.price[is.nan(trades_agg$weighted.price)]=0
+    
     #no last.price faz a ultima observação se carregada para as próximas
     trades_agg$last.price<-na.locf(with(trades_agg, 
-                                            ifelse(last.price == 0, NA_real_, last.price)), fromLast = TRUE)
-    
-    
-    
-    #make some new variables
-    #make  vol buy
-      trades_agg[,ncol(trades_agg)+1]=integer()
-      names(trades_agg)[ncol(trades_agg)]<-"vol.buy"
-      
-      for (h in 1:(nrow(trades_agg)-1)){
-        trades_agg[h,ncol(trades_agg)]<-if(nrow(subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[h] & 
-                                          Tradetime<trades_agg$Tradetime[h+1])["TradedQuantity"])>0 ){
-          
-                                          sum(subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[h] & 
-                                          Tradetime<trades_agg$Tradetime[h+1])["TradedQuantity"])
-                                          
-                                          }else{0}
-      }
-      
-      trades_agg[nrow(trades_agg),ncol(trades_agg)]<-if(nrow((subset(trades_raw, TradeSign==1 & 
-                                                     Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]))["TradedQuantity"]))==0 |
-                                                     nrow(subset(trades_raw, TradeSign==1 & 
-                                                     Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]+
-                                                     trades_agg$Tradetime[nrow(trades_agg)]-trades_agg$Tradetime[nrow(trades_agg)-1])
-                                                     ["TradedQuantity"]))==0){0}else{
-                                                    
-                                                     sum(subset(trades_raw, TradeSign==1 & 
-                                                     Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]))["TradedQuantity"])-
-                                                     sum(subset(trades_raw, TradeSign==1 & 
-                                                     Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]+
-                                                     trades_agg$Tradetime[nrow(trades_agg)]-trades_agg$Tradetime[nrow(trades_agg)-1]))
-                                                     ["TradedQuantity"])}
-      
-      
-      
-      #make vol sell
-      trades_agg[,ncol(trades_agg)+1]=integer()
-      names(trades_agg)[ncol(trades_agg)]<-"vol.sell"
-      
-      for (h in 1:(nrow(trades_agg)-1)){
-      trades_agg[h,ncol(trades_agg)]<-if(nrow(subset(trades_raw, TradeSign==-1 & Tradetime>trades_agg$Tradetime[h] & 
-                                        Tradetime<trades_agg$Tradetime[h+1])["TradedQuantity"])>0 ){
-          
-                                        sum(subset(trades_raw, TradeSign==-1 & Tradetime>trades_agg$Tradetime[h] & 
-                                        Tradetime<trades_agg$Tradetime[h+1])["TradedQuantity"])
-          
-                                        }else{0}
-      }
-      
-      trades_agg[nrow(trades_agg),ncol(trades_agg)]<-if(nrow((subset(trades_raw, TradeSign==-1 & 
-                                                        Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]))["TradedQuantity"]))==0 |
-                                                        nrow(subset(trades_raw, TradeSign==-1 & 
-                                                        Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]+
-                                                        trades_agg$Tradetime[nrow(trades_agg)]-trades_agg$Tradetime[nrow(trades_agg)-1])
-                                                        ["TradedQuantity"]))==0){0}else{
-                                                                      
-                                                        sum(subset(trades_raw, TradeSign==-1 & 
-                                                        Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]))["TradedQuantity"])-
-                                                        sum(subset(trades_raw, TradeSign==-1 & 
-                                                        Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]+
-                                                        trades_agg$Tradetime[nrow(trades_agg)]-trades_agg$Tradetime[nrow(trades_agg)-1]))
-                                                        ["TradedQuantity"])}
-      
-      #make vwap buy
-      trades_agg[,ncol(trades_agg)+1]=integer()
-      names(trades_agg)[ncol(trades_agg)]<-"vwap.buy"
-      
-      for (h in 1:(nrow(trades_agg)-1)){
-        trades_agg[h,ncol(trades_agg)]<- if(nrow(subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[h] & 
-                                            Tradetime<trades_agg$Tradetime[h+1])["TradedQuantity"]*
-                                            subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[h] & 
-                                            Tradetime<trades_agg$Tradetime[h+1])["TradePrice"])>0){
-                                              
-                                            sum(subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[h] & 
-                                            Tradetime<trades_agg$Tradetime[h+1])["TradedQuantity"]*
-                                            subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[h] & 
-                                            Tradetime<trades_agg$Tradetime[h+1])["TradePrice"])
-                                            } else{0}
-      }
-      
-      trades_agg[nrow(trades_agg),ncol(trades_agg)]<-if(nrow(subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[nrow(trades_agg)])["TradedQuantity"]*
-                                                         subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[nrow(trades_agg)])["TradePrice"])==0 
-                                                        |
-                                                        nrow(subset(trades_raw, TradeSign==1 & Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]+
-                                                         trades_agg$Tradetime[nrow(trades_agg)]-trades_agg$Tradetime[nrow(trades_agg)-1]))["TradedQuantity"]*
-                                                         subset(trades_raw, TradeSign==1 & Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]+
-                                                         trades_agg$Tradetime[nrow(trades_agg)]-trades_agg$Tradetime[nrow(trades_agg)-1]))["TradePrice"])==0){
-                                                     
-                                                        0
-                                                       } else {
-                                                        sum(subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[nrow(trades_agg)])["TradedQuantity"]*
-                                                        subset(trades_raw, TradeSign==1 & Tradetime>trades_agg$Tradetime[nrow(trades_agg)])["TradePrice"])-
-                                                        sum(subset(trades_raw, TradeSign==1 & Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]+
-                                                        trades_agg$Tradetime[nrow(trades_agg)]-trades_agg$Tradetime[nrow(trades_agg)-1]))["TradedQuantity"]*
-                                                        subset(trades_raw, TradeSign==1 & Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]+
-                                                        trades_agg$Tradetime[nrow(trades_agg)]-trades_agg$Tradetime[nrow(trades_agg)-1]))["TradePrice"])
-                                                       }
-      
-      #make vwap sell
-      trades_agg[,ncol(trades_agg)+1]=integer()
-      names(trades_agg)[ncol(trades_agg)]<-"vwap.sell"
-      
-      for (h in 1:(nrow(trades_agg)-1)){
-        trades_agg[h,ncol(trades_agg)]<- if(nrow(subset(trades_raw, TradeSign==-1 & Tradetime>trades_agg$Tradetime[h] & 
-                                         Tradetime<trades_agg$Tradetime[h+1])["TradedQuantity"]*
-                                         subset(trades_raw, TradeSign==-1 & Tradetime>trades_agg$Tradetime[h] & 
-                                         Tradetime<trades_agg$Tradetime[h+1])["TradePrice"])>0){
-        
-                                         sum(subset(trades_raw, TradeSign==-1 & Tradetime>trades_agg$Tradetime[h] & 
-                                         Tradetime<trades_agg$Tradetime[h+1])["TradedQuantity"]*
-                                         subset(trades_raw, TradeSign==-1 & Tradetime>trades_agg$Tradetime[h] & 
-                                         Tradetime<trades_agg$Tradetime[h+1])["TradePrice"])
-                                         } else{0}
-                                       }
+                                            ifelse(last.price == 0, NA_real_, last.price)))
   
-      trades_agg[nrow(trades_agg),ncol(trades_agg)]<-if(nrow(subset(trades_raw, TradeSign==-1 & Tradetime>trades_agg$Tradetime[nrow(trades_agg)])["TradedQuantity"]*
-                                                         subset(trades_raw, TradeSign==-1 & Tradetime>trades_agg$Tradetime[nrow(trades_agg)])["TradePrice"])==0 
-                                                        |
-                                                        nrow(subset(trades_raw, TradeSign==-1 & Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]+
-                                                          trades_agg$Tradetime[nrow(trades_agg)]-trades_agg$Tradetime[nrow(trades_agg)-1]))["TradedQuantity"]*
-                                                          subset(trades_raw, TradeSign==-1 & Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]+
-                                                          trades_agg$Tradetime[nrow(trades_agg)]-trades_agg$Tradetime[nrow(trades_agg)-1]))["TradePrice"])==0){
+    #retorno no período
+    trades_agg$period.ret[2:nrow(trades_agg)]<-(trades_agg$last.price[2:nrow(trades_agg)]/
+                                               trades_agg$last.price[1:nrow(trades_agg)-1])-1
     
-                                                        0
-                                                     } else {
-                                                       sum(subset(trades_raw, TradeSign==-1 & Tradetime>trades_agg$Tradetime[nrow(trades_agg)])["TradedQuantity"]*
-                                                       subset(trades_raw, TradeSign==-1 & Tradetime>trades_agg$Tradetime[nrow(trades_agg)])["TradePrice"])-
-                                                       sum(subset(trades_raw, TradeSign==-1 & Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]+
-                                                       trades_agg$Tradetime[nrow(trades_agg)]-trades_agg$Tradetime[nrow(trades_agg)-1]))["TradedQuantity"]*
-                                                       subset(trades_raw, TradeSign==-1 & Tradetime>(trades_agg$Tradetime[nrow(trades_agg)]+
-                                                       trades_agg$Tradetime[nrow(trades_agg)]-trades_agg$Tradetime[nrow(trades_agg)-1]))["TradePrice"])
-                                                     }
-      trades_agg$TradeDateTime<-as.integer(as.POSIXct(trades_agg$TradeDateTime,format='%Y-%m-%d %H:%M:%S'))
+    #cria uma coluna pra guardaar 4 variáveis que criaremos
+    
+    trades_agg[,ncol(trades_agg)+1]=0
+    names(trades_agg)[ncol(trades_agg)]<-"vol.buys"
+    
+    trades_agg[,ncol(trades_agg)+1]=0
+    names(trades_agg)[ncol(trades_agg)]<-"vol.sells"
+    
+    trades_agg[,ncol(trades_agg)+1]=0
+    names(trades_agg)[ncol(trades_agg)]<-"weighted.price.buys"    
+    
+    trades_agg[,ncol(trades_agg)+1]=0
+    names(trades_agg)[ncol(trades_agg)]<-"weighted.price.sells"
+    
+    #recupera a volatilidade ponderada e preenche os vol.buy e vol.sell
+    for (i in 2:nrow(trades_agg)){
+      if(nrow(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i] &
+                     TradeDateTime>trades_agg$TradeDateTime[i-1]))>0){
+        sub<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i] &
+                      TradeDateTime>trades_agg$TradeDateTime[i-1])
+        #recupera a volatilidade pondedrada
+        if(nrow(sub)>1){
+          trades_agg$period.ret.volat[i]<-wt.var(x=sub$TradePrice,wt=sub$TradedQuantity)
+          }
+        #recupera vol.buys
+        if(nrow(subset(sub,TradeSign==1))>1){
+          trades_agg$vol.buys[i]<-sum(subset(sub,TradeSign==1)["TradePrice"]*subset(sub,TradeSign==1)["TradedQuantity"])
+          trades_agg$weighted.price.buys[i]<-wt.mean(x=subset(sub,TradeSign==1)["TradePrice"],wt=subset(sub,TradeSign==1)["TradedQuantity"])
+        } else {
+          trades_agg$vol.buys[i]<-sum(subset(sub,TradeSign==1)["TradePrice"]*subset(sub,TradeSign==1)["TradedQuantity"])
+          trades_agg$weighted.price.buys[i]<-sum(subset(sub,TradeSign==1)["TradePrice"]*subset(sub,TradeSign==1)["TradedQuantity"])
+        }
+        #recupera vol.sells
+        if(nrow(subset(sub,TradeSign==-1))>1){
+          trades_agg$vol.sells[i]<-sum(subset(sub,TradeSign==-1)["TradePrice"]*subset(sub,TradeSign==-1)["TradedQuantity"])
+          trades_agg$weighted.price.sells[i]<-wt.mean(x=subset(sub,TradeSign==1)["TradePrice"],wt=subset(sub,TradeSign==1)["TradedQuantity"])
+        } else{
+          trades_agg$vol.buys[i]<-sum(subset(sub,TradeSign==-1)["TradePrice"]*subset(sub,TradeSign==-1)["TradedQuantity"])
+          trades_agg$weighted.price.buys[i]<-sum(subset(sub,TradeSign==-1)["TradePrice"]*subset(sub,TradeSign==-1)["TradedQuantity"])
+        }
+        rm(sub)
+      }
+    }
+    
+
+    
+       trades_agg$TradeDateTime<-as.integer(as.POSIXct(trades_agg$TradeDateTime,format='%Y-%m-%d %H:%M:%S'))
     #get BOOK !!!!
       
       
