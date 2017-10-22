@@ -144,7 +144,7 @@ for (round_assets in 1:number_assets) {
           if(nrow(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i] &
                          TradeDateTime>(trades_agg$TradeDateTime[i-1]-agregacao*60+60)))>0){
             subcon<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i] &
-                             TradeDateTime>(trades_agg$TradeDateTime[i-1]-agregacao*60+60))
+                             TradeDateTime>(trades_agg$TradeDateTime[i-1]-(agregacao*60)+60))
             trades_agg$n.trades[i]<-nrow(subcon)
             trades_agg$sum.qtd[i]<-sum(subcon$TradedQuantity)
             trades_agg$sum.vol[i]<-sum(subcon$TradedQuantity*subcon$TradePrice)
@@ -179,7 +179,7 @@ for (round_assets in 1:number_assets) {
         
         #Preenche os valores da primeira linha
         if(nrow(subset(trades_raw,TradeDateTime==trades_agg$TradeDateTime[1]))>0){
-          subcon<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[1]-agregacao*60+60)
+          subcon<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[1])
           trades_agg$n.trades[1]<-nrow(subcon)
           trades_agg$sum.qtd[1]<-sum(subcon$TradedQuantity)
           trades_agg$sum.vol[1]<-sum(subcon$TradedQuantity*subcon$TradePrice)
@@ -435,8 +435,6 @@ for (round_assets in 1:number_assets) {
     resumo[agregacao,23:29]<-c$overall
   }
   #Fazer estimação
-  
 }
 
 
-  plot(final_product[5])
