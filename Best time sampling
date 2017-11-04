@@ -10,7 +10,9 @@ library(GetHFData)
 library(plyr)
 library(dplyr)
 library(lubridate)
+library(Weighted.Desc.Stat)
 library(chron)
+library(ggplot2)
 library(tictoc)
 library(data.table)
 library(xgboost)
@@ -23,20 +25,25 @@ library(SDMTools)
 assets=c("PETR4","VALE5","ABEV3")
 number_assets=length(assets)
 type.market="equity"
-#Os futuros começamas 09 ja a bovespa começa as 10, eu não quero dados de after market por isso peço dados de até 17:00
+#Os futuros começam as 09 ja a bovespa começa as 10, eu não quero dados de after market por isso peço dados de até 17:00
 first.time <- '10:00:00'
 last.time <- '17:00:00'
 #Verifica quais são as datas que você ja tem  arquivos disponibilizados pela bolsa
 contents<-ghfd_get_ftp_contents(type.market="equity")
 #Define quanto dos ultimos dias atualizados você vai querer
-trading_days<-5
+trading_days<-100
 last.date<-tail(contents$dates,1)
 first.date<-contents$dates[nrow(contents)-trading_days]
 dates<-contents$dates[which(contents$dates == last.date):which(contents$dates == first.date)]
 #Define o nivel de agregação e o tipo de agregação máxima que você vai querer
-agregação_maxima=5
-tipo_agregacao="min"
-resumo<-data.frame(matrix(nrow=agregação_maxima,ncol=29),row.names=1:agregação_maxima)
+agregacao_maxima=60
+tipo_agregacao="mins"
+#salto define a diferença de tempo de uma linha pra outra no data frame em segundos
+agregacao_minima<-sprintf("1 %s",tipo_agregacao)
+#salto é a agregacao_minima em segundos
+salto=60
+
+resumo<-data.frame(matrix(nrow=agregacao_maxima,ncol=29),row.names=1:agregacao_maxima)
 
 colnames(resumo)<-c("Sensitivity buy","Specificity buy","Pos Pred Value buy","Neg Pred Value buy"
                     ,"Precision buy","Recall buy","F1 buy","Prevalence buy",
@@ -52,16 +59,14 @@ colnames(resumo)<-c("Sensitivity buy","Specificity buy","Pos Pred Value buy","Ne
 for (round_assets in 1:number_assets) {
   asset<-assets[round_assets]
   #faz pra uma dada agregação
-  for(agregacao in 1:trading_days){
+  for(agregacao in 1:agregacao_maxima){
     #todos os dias
-    for(round in 1:agregação_maxima) {
+    for(round in 1:trading_days) {
         date<-dates[round]
         time<-"1 sec"
         #############################
         ##Pega Dados
         ############################
-        
-        
         #Get trades data by raw
         if(file.exists(sprintf("H://treated_variables//times and trades//agg//%s//%s//%s.csv",time,asset,date))){
           trades_agg_1sec <- read.csv(sprintf("H://treated_variables//times and trades//agg//%s//%s//%s.csv",time,asset,date),header=TRUE)
@@ -96,10 +101,8 @@ for (round_assets in 1:number_assets) {
         trades_raw$TradeDateTime<-as.POSIXct(trades_raw$TradeDateTime)
         trades_agg_1sec$TradeDateTime<-as.POSIXct(trades_agg_1sec$TradeDateTime)
         
-        #define o tipo de agregacao minima que sera usada
-        agregacao_minima<-sprintf("1 %s",tipo_agregacao)
         #Controi o vetor que servirá de base para todos os outros
-        sequencia_temporal=seq(from=(round.POSIXt(as.POSIXct(paste(date,first(trades_agg_1sec$Tradetime))),"mins")+agregacao*60-60),
+        sequencia_temporal=seq(from=(round.POSIXt(as.POSIXct(paste(date,first(trades_agg_1sec$Tradetime))),tipo_agregacao)+agregacao*salto),
                                to=as.POSIXct(paste(date,last(trades_agg_1sec$Tradetime))),
                                by=agregacao_minima)
         
@@ -124,7 +127,7 @@ for (round_assets in 1:number_assets) {
         ############################################
        
     
-        #cria uma coluna pra guardaar 4 variáveis que criaremos
+        #cria colunas pra guardar 4 variáveis que criaremos
         
         trades_agg[,ncol(trades_agg)+1]=0
         names(trades_agg)[ncol(trades_agg)]<-"vol.buys"
@@ -138,56 +141,48 @@ for (round_assets in 1:number_assets) {
         trades_agg[,ncol(trades_agg)+1]=0
         names(trades_agg)[ncol(trades_agg)]<-"weighted.price.sells"
         
-        #recupera as informações tomando como base o times and trades por linha
-  
-        for (i in 2:nrow(trades_agg)){
-          if(nrow(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i] &
-                         TradeDateTime>(trades_agg$TradeDateTime[i-1]-agregacao*60+60)))>0){
-            subcon<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i] &
-                             TradeDateTime>(trades_agg$TradeDateTime[i-1]-(agregacao*60)+60))
-            trades_agg$n.trades[i]<-nrow(subcon)
-            trades_agg$sum.qtd[i]<-sum(subcon$TradedQuantity)
-            trades_agg$sum.vol[i]<-sum(subcon$TradedQuantity*subcon$TradePrice)
-            trades_agg$last.price[i]<-last(subcon$TradePrice)
-            #recupera a volatilidade pondedrada
-            if(nrow(subcon)>1){
-              trades_agg$period.ret.volat[i]<-wt.var(x=subcon$TradePrice,wt=subcon$TradedQuantity)
-              }
-            #recupera buys
-            if(nrow(subset(subcon,TradeSign==1))>0){
-              trades_agg$n.buys[i]<-nrow(subset(subcon,TradeSign==1))
-              trades_agg$vol.buys[i]<-sum(subset(subcon,TradeSign==1)["TradePrice"]*subset(subcon,TradeSign==1)["TradedQuantity"])
-              trades_agg$weighted.price.buys[i]<-wt.mean(x=subset(subcon,TradeSign==1)$TradePrice,wt=subset(subcon,TradeSign==1)$TradedQuantity)
-            }
-            #recupera sells
-            if(nrow(subset(subcon,TradeSign==-1))>0){
-              trades_agg$n.sells[i]<-nrow(subset(subcon,TradeSign==-1))
-              trades_agg$vol.sells[i]<-sum(subset(subcon,TradeSign==-1)["TradePrice"]*subset(subcon,TradeSign==-1)["TradedQuantity"])
-              trades_agg$weighted.price.sells[i]<-wt.mean(x=subset(subcon,TradeSign==-1)$TradePrice,wt=subset(subcon,TradeSign==-1)$TradedQuantity)
-            }
-            rm(subcon)
-          }
-        }
-  
-        #cria o preço ponderado
-        trades_agg$weighted.price<-trades_agg$sum.vol/trades_agg$sum.qtd
-        trades_agg$weighted.price[is.nan(trades_agg$weighted.price)]=0
+        #eu vou guardar alguns momentos de todos os períodos
+        trades_agg[,ncol(trades_agg)+1]=0
+        names(trades_agg)[ncol(trades_agg)]<-"mean" 
         
-        #no last.price faz a ultima observação se carregada para as próximas
-        trades_agg$last.price[2:nrow(trades_agg)]<-na.locf(with(trades_agg, 
-                                            ifelse(last.price == 0, NA_real_, last.price)))
+        trades_agg[,ncol(trades_agg)+1]=0
+        names(trades_agg)[ncol(trades_agg)]<-"variance" 
+        
+        trades_agg[,ncol(trades_agg)+1]=0
+        names(trades_agg)[ncol(trades_agg)]<-"skewness"    
+        
+        trades_agg[,ncol(trades_agg)+1]=0
+        names(trades_agg)[ncol(trades_agg)]<-"kurtosis"
+        
+         
         
         #Preenche os valores da primeira linha
-        if(nrow(subset(trades_raw,TradeDateTime==trades_agg$TradeDateTime[1]))>0){
+        if(nrow(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[1]))>0){
           subcon<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[1])
           trades_agg$n.trades[1]<-nrow(subcon)
           trades_agg$sum.qtd[1]<-sum(subcon$TradedQuantity)
           trades_agg$sum.vol[1]<-sum(subcon$TradedQuantity*subcon$TradePrice)
           trades_agg$last.price[1]<-last(subcon$TradePrice)
-          #recupera a volatilidade pondedrada
+          trades_agg$weighted.price[1]<-wt.mean(x=(subcon$TradePrice),wt=subcon$TradedQuantity)
+          trades_agg$period.ret.volat[1]<-wt.var(x=(subcon$TradePrice),wt=subcon$TradedQuantity)
+          
+          period.ret
+          #recupera os 4 primeiros momentos do retorno no período
+          open_price<-first(subcon$TradePrice)
+          trades_agg$period.ret[1]<-(last(subcon$TradePrice)/open_price)-1
           if(nrow(subcon)>1){
-            trades_agg$period.ret.volat[1]<-wt.var(x=subcon$TradePrice,wt=subcon$TradedQuantity)
+            trades_agg$mean[1]<-wt.mean(x=(subcon$TradePrice/open_price),wt=subcon$TradedQuantity)
           }
+          if(nrow(subcon)>1){
+            trades_agg$variance[1]<-wt.var(x=(subcon$TradePrice/open_price),wt=subcon$TradedQuantity)
+          }
+          if(nrow(subcon)>1){
+            trades_agg$skewness[1]<-w.skewness(x=subcon$TradePrice/open_price,mu=subcon$TradedQuantity)
+          }
+          if(nrow(subcon)>1){
+            trades_agg$kurtosis[1]<-w.kurtosis(x=subcon$TradePrice/open_price,mu=subcon$TradedQuantity)
+          }
+          
           #recupera buys
           if(nrow(subset(subcon,TradeSign==1))>0){
             trades_agg$n.buys[1]<-nrow(subset(subcon,TradeSign==1))
@@ -203,23 +198,61 @@ for (round_assets in 1:number_assets) {
           rm(subcon)
         }
         
-        #cria o preço ponderado
-        trades_agg$weighted.price<-trades_agg$sum.vol/trades_agg$sum.qtd
-        trades_agg$weighted.price[is.nan(trades_agg$weighted.price)]=0
         
-        if (trades_agg[1,4]==0){
-        #no last.price faz a ultima observação se carregada para as próximas
-        trades_agg$last.price[2:nrow(trades_agg)]<-
-          na.locf(with(trades_agg,ifelse(last.price == 0, NA_real_, last.price)))
-        }else{
-          trades_agg$last.price<-na.locf(with(trades_agg,ifelse(last.price == 0, NA_real_, last.price)))
+        #recupera as informações tomando como base o times and trades por linha
+        for (i in 2:nrow(trades_agg)){
+          if(nrow(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i] &
+                         TradeDateTime>(trades_agg$TradeDateTime[i-1]-agregacao*salto+salto)))>0){
+            
+            subcon<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i] &
+                             TradeDateTime>(trades_agg$TradeDateTime[i-1]-(agregacao*salto)+salto))
+            
+            trades_agg$n.trades[i]<-nrow(subcon)
+            trades_agg$sum.qtd[i]<-sum(subcon$TradedQuantity)
+            trades_agg$sum.vol[i]<-sum(subcon$TradedQuantity*subcon$TradePrice)
+            trades_agg$last.price[i]<-last(subcon$TradePrice)
+            trades_agg$weighted.price[i]<-wt.mean(x=(subcon$TradePrice),wt=subcon$TradedQuantity)
+            
+            #define o preço referencia
+            last_price<-last(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i-agregacao])$TradePrice)
+            trades_agg$period.ret[i]<-(last(subcon$TradePrice)/last_price)-1
+            
+            #recupera os primeiros 4 primeiros momentos dos retornos
+            if(nrow(subcon)>1){
+              trades_agg$mean[i]<-wt.mean(x=(subcon$TradePrice/last_price),wt=subcon$TradedQuantity)
+            }
+            if(nrow(subcon)>1){
+              trades_agg$variance[i]<-wt.var(x=(subcon$TradePrice/last_price),wt=subcon$TradedQuantity)
+            }
+            if(nrow(subcon)>1){
+              trades_agg$skewness[i]<-w.skewness(x=subcon$TradePrice/last_price,mu=subcon$TradedQuantity)
+            }
+            if(nrow(subcon)>1){
+              trades_agg$kurtosis[i]<-w.kurtosis(x=subcon$TradePrice/last_price,mu=subcon$TradedQuantity)
+            }
+            
+          
+            #recupera buys
+            if(nrow(subset(subcon,TradeSign==1))>0){
+              trades_agg$n.buys[i]<-nrow(subset(subcon,TradeSign==1))
+              trades_agg$vol.buys[i]<-sum(subset(subcon,TradeSign==1)["TradePrice"]*subset(subcon,TradeSign==1)["TradedQuantity"])
+              trades_agg$weighted.price.buys[i]<-wt.mean(x=subset(subcon,TradeSign==1)$TradePrice,wt=subset(subcon,TradeSign==1)$TradedQuantity)
+            }
+            #recupera sells
+            if(nrow(subset(subcon,TradeSign==-1))>0){
+              trades_agg$n.sells[i]<-nrow(subset(subcon,TradeSign==-1))
+              trades_agg$vol.sells[i]<-sum(subset(subcon,TradeSign==-1)["TradePrice"]*subset(subcon,TradeSign==-1)["TradedQuantity"])
+              trades_agg$weighted.price.sells[i]<-wt.mean(x=subset(subcon,TradeSign==-1)$TradePrice,wt=subset(subcon,TradeSign==-1)$TradedQuantity)
+            }
+            rm(subcon)
+          } else {
+            trades_agg$last.price[i]<-last(trades_agg$last.price[trades_agg$last.price!=0])
+          }
         }
-        #retorno no período
-        if(trades_agg[1,4]==0){
-        trades_agg$period.ret[3:nrow(trades_agg)]<-(trades_agg$last.price[3:(nrow(trades_agg))]/
-                                                      trades_agg$last.price[2:(nrow(trades_agg)-1)])-1
-        }else{trades_agg$period.ret[2:nrow(trades_agg)]<-(trades_agg$last.price[2:nrow(trades_agg)]/
-                                                            trades_agg$last.price[1:nrow(trades_agg)-1])-1}
+  
+        
+
+
         ############################
         #PEGA O BOOK
         ############################
@@ -240,21 +273,28 @@ for (round_assets in 1:number_assets) {
         date_book<-format(strptime(date_book,"%Y-%m-%d %H:%M:%S"),'%H:%M:%S')
         book_agg$OrderDatetime<-as.POSIXct(book_agg$OrderDatetime)
         date_book<-chron(times=date_book)
+        
   
-        book_agg<-cbind(book_agg[1:(nrow(book_agg)/2),],
-                        book_agg[((nrow(book_agg)/2)+1):nrow(book_agg),])
-        book_agg<-book_agg[,c(4,5,6,7,8,10,11,12,17,18,19,20,22,23,24)]
-        names(book_agg)[1:15]<-c("OrderDatetime","n.order.buy", "avg.order.price.buy","max.order.price.buy",
-                                     "min.order.price.buy","n.new.order.buy","n.update.order.buy",
-                                     "n.cancelled.order.buy",
-                                     "n.order.sell", "avg.order.price.sell","max.order.price.sell",
-                                     "min.order.price.sell","n.new.order.sell","n.update.order.sell",
-                                     "n.cancelled.order.sell")
+        
+        #book_agg<-cbind(book_agg[1:(nrow(book_agg)/2),],
+         #               book_agg[((nrow(book_agg)/2)+1):nrow(book_agg),])
+        #book_agg<-book_agg[,c(4,5,6,7,8,10,11,12,17,18,19,20,22,23,24)]
+        #names(book_agg)[1:15]<-c("OrderDatetime","n.order.buy", "avg.order.price.buy","max.order.price.buy",
+        #                             "min.order.price.buy","n.new.order.buy","n.update.order.buy",
+        #                             "n.cancelled.order.buy",
+        #                             "n.order.sell", "avg.order.price.sell","max.order.price.sell",
+        #                             "min.order.price.sell","n.new.order.sell","n.update.order.sell",
+        #                             "n.cancelled.order.sell")
           
         ###CONTROI O VETOR QUE AGREGARÁ OS DADOS DO BOOK
-        book_agregado<-data.frame(matrix(0, nrow = length(sequencia_temporal), ncol = ncol(book_agg)))
+        book_agregado<-data.frame(matrix(0, nrow = length(sequencia_temporal), ncol = 15))
         rownames(book_agregado)<-sequencia_temporal
-        colnames(book_agregado)<-colnames(book_agg)
+        colnames(book_agregado)<-c("OrderDatetime","n.order.buy", "avg.order.price.buy","max.order.price.buy",
+                                                               "min.order.price.buy","n.new.order.buy","n.update.order.buy",
+                                                               "n.cancelled.order.buy",
+                                                               "n.order.sell", "avg.order.price.sell","max.order.price.sell",
+                                                               "min.order.price.sell","n.new.order.sell","n.update.order.sell",
+                                                               "n.cancelled.order.sell")
         book_agregado$OrderDatetime<-as.POSIXct(sequencia_temporal)
   
         
@@ -263,43 +303,66 @@ for (round_assets in 1:number_assets) {
         #############################
         for (i in 2:nrow(book_agregado)){
           if(nrow(subset(book_agg,OrderDatetime<=book_agregado$OrderDatetime[i] &
-                         OrderDatetime>(book_agregado$OrderDatetime[i-1]+60-60*agregacao)))>0){
+                         OrderDatetime>(book_agregado$OrderDatetime[i-1]+salto-salto*agregacao)))>0){
             
-            subcon<-subset(book_agg,OrderDatetime<=book_agregado$OrderDatetime[i] &
-                             OrderDatetime>book_agregado$OrderDatetime[i-1]+60-60*agregacao)
+            subcon_buy<-subset(book_agg,OrderDatetime<=book_agregado$OrderDatetime[i] &
+                             OrderDatetime>book_agregado$OrderDatetime[i-1]+salto-salto*agregacao,
+                             type.order="buy")
             
-            for (j in 2:ncol(book_agregado)){
-              book_agregado[i,j]<-sum(subcon[,j])
-            }
+            subcon_sell<-subset(book_agg,OrderDatetime<=book_agregado$OrderDatetime[i] &
+                                  OrderDatetime>book_agregado$OrderDatetime[i-1]+salto-salto*agregacao,
+                                type.order="sell")
             
+            #for (j in 2:ncol(book_agregado)){
+            #  book_agregado[i,j]<-sum(subcon[,j])+sum(subcon_sell[,j])
+            #}
             
-            book_agregado$avg.order.price.buy[i]<-weighted.mean(subcon$avg.order.price.buy,subcon$n.order.buy)
-            book_agregado$max.order.price.buy[i]<-max(subcon$avg.order.price.buy)
-            book_agregado$min.order.price.buy[i]<-min(subcon$avg.order.price.buy)
-            book_agregado$avg.order.price.sell[i]<-weighted.mean(subcon$avg.order.price.buy,subcon$n.order.sell)
-            book_agregado$max.order.price.sell[i]<-max(subcon$avg.order.price.sell)
-            book_agregado$min.order.price.sell[i]<-min(subcon$avg.order.price.sell)
+          
+            book_agregado$n.order.buy[i]<-nrow(subcon_buy)
+            book_agregado$n.new.order.buy[i]<-sum(subcon_buy$n.new.order)
+            book_agregado$n.update.order.buy[i]<-sum(subcon_buy$n.update.order)
+            book_agregado$n.cancelled.order.buy[i]<-sum(subcon_buy$n.cancelled.order)
+            book_agregado$n.order.sell[i]<--nrow(subcon_sell)
+            book_agregado$n.new.order.sell[i]<-sum(subcon_sell$n.new.order)
+            book_agregado$n.update.order.sell[i]<-sum(subcon_sell$n.update.order)
+            book_agregado$n.cancelled.order.sell[i]<-sum(subcon_sell$n.cancelled.order)
+            book_agregado$avg.order.price.buy[i]<-weighted.mean(subcon_buy$avg.order.price,subcon_buy$n.order)
+            book_agregado$max.order.price.buy[i]<-max(subcon_buy$max.order.price)
+            book_agregado$min.order.price.buy[i]<-min(subcon_buy$min.order.price)
+            book_agregado$avg.order.price.sell[i]<-weighted.mean(subcon_sell$avg.order.price,subcon_sell$n.order)
+            book_agregado$max.order.price.sell[i]<-max(subcon_sell$max.order.price)
+            book_agregado$min.order.price.sell[i]<-min(subcon_sell$min.order.price)
           }
         }
         
         #Preenche a primeira linha
-        if(nrow(subset(book_agg,OrderDatetime<=book_agregado$OrderDatetime[1] &
-                       OrderDatetime>(book_agregado$OrderDatetime[1]+60-60*agregacao-60))>0)){
+        if(nrow(subset(book_agg,OrderDatetime<=book_agregado$OrderDatetime[1]))>0){
           
-          subcon<-subset(book_agg,OrderDatetime<=book_agregado$OrderDatetime[1] &
-                           OrderDatetime>book_agregado$OrderDatetime[1]+60-60*agregacao-60)
+          subcon_buy<-subset(book_agg,OrderDatetime<=book_agregado$OrderDatetime[1],
+                             type.order="buy")
           
-          for (j in 2:ncol(book_agregado)){
-            book_agregado[1,j]<-sum(subcon[,j])
-          }
+          subcon_sell<-subset(book_agg,OrderDatetime<=book_agregado$OrderDatetime[1],
+                              type.order="sell")
+          
+          #for (j in 2:ncol(book_agregado)){
+          #  book_agregado[i,j]<-sum(subcon[,j])+sum(subcon_sell[,j])
+          #}
           
           
-          book_agregado$avg.order.price.buy[1]<-weighted.mean(subcon$avg.order.price.buy,subcon$n.order.buy)
-          book_agregado$max.order.price.buy[1]<-max(subcon$avg.order.price.buy)
-          book_agregado$min.order.price.buy[1]<-min(subcon$avg.order.price.buy)
-          book_agregado$avg.order.price.sell[1]<-weighted.mean(subcon$avg.order.price.buy,subcon$n.order.sell)
-          book_agregado$max.order.price.sell[1]<-max(subcon$avg.order.price.sell)
-          book_agregado$min.order.price.sell[1]<-min(subcon$avg.order.price.sell)
+          book_agregado$n.order.buy[1]<-nrow(subcon_buy)
+          book_agregado$n.new.order.buy[1]<-sum(subcon_buy$n.new.order)
+          book_agregado$n.update.order.buy[1]<-sum(subcon_buy$n.update.order)
+          book_agregado$n.cancelled.order.buy[1]<-sum(subcon_buy$n.cancelled.order)
+          book_agregado$n.order.sell[1]<--nrow(subcon_sell)
+          book_agregado$n.new.order.sell[1]<-sum(subcon_sell$n.new.order)
+          book_agregado$n.update.order.sell[1]<-sum(subcon_sell$n.update.order)
+          book_agregado$n.cancelled.order.sell[1]<-sum(subcon_sell$n.cancelled.order)
+          book_agregado$avg.order.price.buy[1]<-weighted.mean(subcon_buy$avg.order.price,subcon_buy$n.order)
+          book_agregado$max.order.price.buy[1]<-max(subcon_buy$max.order.price)
+          book_agregado$min.order.price.buy[1]<-min(subcon_buy$min.order.price)
+          book_agregado$avg.order.price.sell[1]<-weighted.mean(subcon_sell$avg.order.price,subcon_sell$n.order)
+          book_agregado$max.order.price.sell[1]<-max(subcon_sell$max.order.price)
+          book_agregado$min.order.price.sell[1]<-min(subcon_sell$min.order.price)
         }
         
         
@@ -433,8 +496,17 @@ for (round_assets in 1:number_assets) {
     resumo[agregacao,1:11]<-c$byClass[1,1:11]
     resumo[agregacao,12:22]<-c$byClass[3,1:11]
     resumo[agregacao,23:29]<-c$overall
+    
+    rm(final_product)
   }
   #Fazer estimação
 }
 
+par(mfrow=c(3,2))
+plot.ts(resumo["Sensitivity buy"])
+plot.ts(resumo["Sensitivity sell"])
+plot.ts(resumo["Specificity buy"])
+plot.ts(resumo["Specificity sell"])
+plot.ts(resumo["Precision buy"])
+plot.ts(resumo["Precision sell"])
 
