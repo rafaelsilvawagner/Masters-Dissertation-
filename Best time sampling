@@ -66,7 +66,8 @@ for (round_assets in 1:number_assets) {
   for(agregacao in 1:agregacao_maxima){
     #todos os dias
     for(round in 1:trading_days) {
-        date<-dates[round]
+      print(paste(asset,agregacao,round))  
+      date<-dates[round]
         time<-"1 sec"
         #############################
         ##Pega Dados
@@ -311,7 +312,7 @@ for (round_assets in 1:number_assets) {
              book_agg$n.cancelled.order.buy[1]<-sum(subcon_buy$n.cancelled.order)
              book_agg$avg.order.price.buy[1]<-weighted.mean(subcon_buy$avg.order.price,subcon_buy$n.order)
              book_agg$max.order.price.buy[1]<-max(subcon_buy$max.order.price)
-             book_agg$min.order.price.buy[1]<-min(subcon_buy$min.order.price[subcon_buy$min.order.price!=0])
+             book_agg$min.order.price.buy[1]<-min(subcon_buy$min.order.price)
           }
           
           if(nrow(subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[1] &
@@ -328,7 +329,7 @@ for (round_assets in 1:number_assets) {
             book_agg$n.cancelled.order.sell[1]<-sum(subcon_sell$n.cancelled.order)
             book_agg$avg.order.price.sell[1]<-weighted.mean(subcon_sell$avg.order.price,subcon_sell$n.order)
             book_agg$min.order.price.sell[1]<-min(subcon_sell$min.order.price)
-            book_agg$max.order.price.sell[1]<-max(subcon_sell$max.order.price[subcon_sell$min.order.price!=0])
+            book_agg$max.order.price.sell[1]<-max(subcon_sell$max.order.price)
           }
         }
         
@@ -352,7 +353,7 @@ for (round_assets in 1:number_assets) {
               book_agg$n.cancelled.order.buy[i]<-sum(subcon_buy$n.cancelled.order)
               book_agg$avg.order.price.buy[i]<-weighted.mean(subcon_buy$avg.order.price,subcon_buy$n.order)
               book_agg$max.order.price.buy[i]<-max(subcon_buy$max.order.price)
-              book_agg$min.order.price.buy[i]<-min(subcon_buy$min.order.price[subcon_buy$min.order.price!=0])
+              book_agg$min.order.price.buy[i]<-min(subcon_buy$min.order.price)
             }
             
             if (nrow(subcon_sell<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
@@ -369,7 +370,7 @@ for (round_assets in 1:number_assets) {
             book_agg$n.cancelled.order.sell[i]<-sum(subcon_sell$n.cancelled.order)
             book_agg$avg.order.price.sell[i]<-weighted.mean(subcon_sell$avg.order.price,subcon_sell$n.order)
             book_agg$max.order.price.sell[i]<-max(subcon_sell$max.order.price)
-            book_agg$min.order.price.sell[i]<-min(subcon_sell$min.order.price[subcon_sell$min.order.price!=0])
+            book_agg$min.order.price.sell[i]<-min(subcon_sell$min.order.price)
             }
           }
         }
@@ -380,8 +381,7 @@ for (round_assets in 1:number_assets) {
         #junta o times and trades e o book
         
         para_defasar<-data.frame(cbind(trades_agg,book_agg))
-        
-  
+        para_defasar<-para_defasar[,-which(names(para_defasar) %in% c("OrderDatetime"))]
       
         
         
@@ -394,18 +394,21 @@ for (round_assets in 1:number_assets) {
         dados<-cbind(signal,para_defasar)
         # matriz de regressores defasados
         max.lags <- 4
-        T <- dim(dados)[1]
-        N <- dim(dados)[2]
-        nao_defasar_primeiras<-5
-        for (i in 1:max.lags){
-          ifelse(i==1,
-                 lag.matrix <- dados[i:(T-max.lags+i-1),nao_defasar_primeiras:N],
-                 lag.matrix <- cbind(lag.matrix,dados[i:(T-max.lags+i-1),nao_defasar_primeiras:N]))
+
+        defasada<-dados[(max.lags+1):nrow(dados),]
+        names<-colnames(defasada[,-which(names(defasada) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))])
+        
+        for(i in 1:max.lags){
+          def<-dados[(max.lags-i+1):(nrow(dados)-agregacao-i+1),]
+          def<-def[,-which(names(def) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
+          colnames(def)<-paste(names,"defasagem",i,sep=".")
+          
+          defasada<-cbind(defasada,def)
         }
-        colnames(lag.matrix) <- paste0(colnames(dados[,5:N]),'.lag.',rep(max.lags:1, each=(N-nao_defasar_primeiras-1)))
+        
         # Vetor de variável dependente atual
-        direction<-as.matrix(as.numeric(signal))[(max.lags+1):T,]
-        completa<-cbind(direction,lag.matrix)
+        direction<-as.matrix(as.numeric(signal))[(max.lags+1+agregacao):nrow(dados),]
+        completa<-cbind(direction,defasada[-((nrow(defasada)-agregacao+1):nrow(defasada)),])
 
 
   
@@ -418,6 +421,8 @@ for (round_assets in 1:number_assets) {
       
     }
     
+    #retira o symbolo a data da sessão e o horarios
+    final_product<-final_product[,-which(names(final_product) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
     
     # Define dados de treino (50%) e validação (50%)
     train <- 1:round(0.8*T)
