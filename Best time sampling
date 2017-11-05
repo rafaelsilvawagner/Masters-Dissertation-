@@ -346,7 +346,7 @@ for (round_assets in 1:number_assets) {
                              OrderDatetime>book_agg$OrderDatetime[i-1]+salto-salto*agregacao &
                              type.order=="Buy")
               
-              book_agg$n.order.buy[i]<-sum(subcon_buy$n.order.buy)
+              book_agg$n.order.buy[i]<-sum(subcon_buy$n.order)
               book_agg$n.new.order.buy[i]<-sum(subcon_buy$n.new.order)
               book_agg$n.update.order.buy[i]<-sum(subcon_buy$n.update.order)
               book_agg$n.cancelled.order.buy[i]<-sum(subcon_buy$n.cancelled.order)
@@ -363,7 +363,7 @@ for (round_assets in 1:number_assets) {
                                   OrderDatetime>book_agg$OrderDatetime[i-1]+salto-salto*agregacao&
                                 type.order=="Sell")
             
-            book_agg$n.order.sell[i]<-sum(subcon_sell$n.order.sell)
+            book_agg$n.order.sell[i]<-sum(subcon_sell$n.order)
             book_agg$n.new.order.sell[i]<-sum(subcon_sell$n.new.order)
             book_agg$n.update.order.sell[i]<-sum(subcon_sell$n.update.order)
             book_agg$n.cancelled.order.sell[i]<-sum(subcon_sell$n.cancelled.order)
