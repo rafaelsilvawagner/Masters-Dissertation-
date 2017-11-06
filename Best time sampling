@@ -102,6 +102,7 @@ for (round_assets in 1:number_assets) {
         trades_raw$Tradetime<-chron(times=trades_raw$Tradetime)
         trades_agg_1sec$Tradetime<-chron(times=trades_agg_1sec$Tradetime)
         
+        
         #coloca TradeDateTime em Posix
         trades_raw$TradeDateTime<-as.POSIXct(trades_raw$TradeDateTime)
         trades_agg_1sec$TradeDateTime<-as.POSIXct(trades_agg_1sec$TradeDateTime)
@@ -160,6 +161,7 @@ for (round_assets in 1:number_assets) {
         #Preenche os valores da primeira linha
         if(nrow(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[1]))>0){
           subcon<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[1])
+          
           #preenche as variáveis mais simples
           #o numero de negócios é o numero de linhas
           trades_agg$n.trades[1]<-nrow(subcon)
@@ -179,16 +181,16 @@ for (round_assets in 1:number_assets) {
           open_price<-first(subcon$TradePrice)
           trades_agg$period.ret[1]<-(last(subcon$TradePrice)/open_price)-1
           if(nrow(subcon)>1){
-            trades_agg$MeanReturn[1]<-wt.mean(x=(subcon$TradePrice/open_price),wt=subcon$TradedQuantity)
+            trades_agg$MeanReturn[1]<-wt.mean(x=((subcon$TradePrice/open_price)-1),wt=subcon$TradedQuantity)
           }
           if(nrow(subcon)>1){
-            trades_agg$VarianceReturn[1]<-wt.var(x=(subcon$TradePrice/open_price),wt=subcon$TradedQuantity)
+            trades_agg$VarianceReturn[1]<-wt.var(x=((subcon$TradePrice/open_price)-1),wt=subcon$TradedQuantity)
           }
           if(nrow(subcon)>1){
-            trades_agg$SkewnessReturn[1]<-w.skewness(x=subcon$TradePrice/open_price,mu=subcon$TradedQuantity)
+            trades_agg$SkewnessReturn[1]<-w.skewness(x=(subcon$TradePrice/open_price-1),mu=subcon$TradedQuantity)
           }
           if(nrow(subcon)>1){
-            trades_agg$KurtosisReturn[1]<-w.kurtosis(x=subcon$TradePrice/open_price,mu=subcon$TradedQuantity)
+            trades_agg$KurtosisReturn[1]<-w.kurtosis(x=(subcon$TradePrice/open_price-1),mu=subcon$TradedQuantity)
           }
           
           #recupera buys
@@ -223,21 +225,21 @@ for (round_assets in 1:number_assets) {
             trades_agg$period.price.volat[i]<-wt.var(x=(subcon$TradePrice),wt=subcon$TradedQuantity)
             
             #define o preço referencia
-            last_price<-last(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i-agregacao])$TradePrice)
+            last_price<-last(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i]-agregacao*salto)$TradePrice)
             trades_agg$period.ret[i]<-(last(subcon$TradePrice)/last_price)-1
             
             #recupera os primeiros 4 primeiros momentos dos retornos
             if(nrow(subcon)>1){
-              trades_agg$MeanReturn[i]<-wt.mean(x=(subcon$TradePrice/last_price),wt=subcon$TradedQuantity)
+              trades_agg$MeanReturn[i]<-wt.mean(x=((subcon$TradePrice/last_price)-1),wt=subcon$TradedQuantity)
             }
             if(nrow(subcon)>1){
-              trades_agg$VarianceReturn[i]<-wt.var(x=(subcon$TradePrice/last_price),wt=subcon$TradedQuantity)
+              trades_agg$VarianceReturn[i]<-wt.var(x=((subcon$TradePrice/last_price)-1),wt=subcon$TradedQuantity)
             }
             if(nrow(subcon)>1){
-              trades_agg$SkewnessReturn[i]<-w.skewness(x=subcon$TradePrice/last_price,mu=subcon$TradedQuantity)
+              trades_agg$SkewnessReturn[i]<-w.skewness(x=(subcon$TradePrice/last_price-1),mu=subcon$TradedQuantity)
             }
             if(nrow(subcon)>1){
-              trades_agg$KurtosisReturn[i]<-w.kurtosis(x=subcon$TradePrice/last_price,mu=subcon$TradedQuantity)
+              trades_agg$KurtosisReturn[i]<-w.kurtosis((x=subcon$TradePrice/last_price-1),mu=subcon$TradedQuantity)
             }
             
           
@@ -340,7 +342,7 @@ for (round_assets in 1:number_assets) {
             
             
             if (nrow(subcon_buy<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
-                                        OrderDatetime>book_agg$OrderDatetime[i-1]+salto-salto*agregacao &
+                                        OrderDatetime>(book_agg$OrderDatetime[i-1]+salto-salto*agregacao) &
                                         type.order=="Buy"))>0){
               
               subcon_buy<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
@@ -357,7 +359,7 @@ for (round_assets in 1:number_assets) {
             }
             
             if (nrow(subcon_sell<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
-                                         OrderDatetime>book_agg$OrderDatetime[i-1]+salto-salto*agregacao&
+                                         OrderDatetime>(book_agg$OrderDatetime[i-1]+salto-salto*agregacao) &
                                          type.order=="Sell"))>0){
           
             subcon_sell<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
@@ -381,7 +383,7 @@ for (round_assets in 1:number_assets) {
         #junta o times and trades e o book
         
         para_defasar<-data.frame(cbind(trades_agg,book_agg))
-        para_defasar<-para_defasar[,-which(names(para_defasar) %in% c("OrderDatetime"))]
+        para_defasar<-para_defasar[,-which(names(para_defasar) %in% c("OrderDatetime","Tradetime"))]
       
         
         
@@ -390,25 +392,27 @@ for (round_assets in 1:number_assets) {
         ######################
         intervalo <- 0.0001 # retornos no intervalo <(-intervalo,+intervalo)> são label 1, menores são 0 e maiores são 2
         
-        signal <- cut(para_defasar$period.ret,breaks=c(-Inf,-intervalo,intervalo,Inf),labels=c(0,1,2)) # multinomial signal
+        
+        signal <- as.numeric(cut(para_defasar$period.ret,breaks=c(-Inf,-intervalo,intervalo,Inf),labels=c(0,1,2))) # multinomial signal
         dados<-cbind(signal,para_defasar)
         # matriz de regressores defasados
         max.lags <- 4
 
-        defasada<-dados[(max.lags+1):nrow(dados),]
-        names<-colnames(defasada[,-which(names(defasada) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))])
+        
+        defasada<-dados[(max.lags*agregacao+1):nrow(dados),]
+        defasada<-defasada[,-which(names(defasada) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
+        names<-colnames(defasada)
         
         for(i in 1:max.lags){
-          def<-dados[(max.lags-i+1):(nrow(dados)-agregacao-i+1),]
-          def<-def[,-which(names(def) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
+          def<-dados[((max.lags-i)*agregacao+1):(nrow(dados)-i*agregacao),
+                     -which(names(dados) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
           colnames(def)<-paste(names,"defasagem",i,sep=".")
-          
           defasada<-cbind(defasada,def)
         }
         
         # Vetor de variável dependente atual
-        direction<-as.matrix(as.numeric(signal))[(max.lags+1+agregacao):nrow(dados),]
-        completa<-cbind(direction,defasada[-((nrow(defasada)-agregacao+1):nrow(defasada)),])
+        direction<-as.matrix(as.numeric(signal))[(max.lags*agregacao+1+1):nrow(dados),]
+        completa<-cbind(direction,defasada[-1,])
 
 
   
@@ -422,18 +426,20 @@ for (round_assets in 1:number_assets) {
     }
     
     #retira o symbolo a data da sessão e o horarios
-    final_product<-final_product[,-which(names(final_product) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
+    treinar<-final_product
     
     # Define dados de treino (50%) e validação (50%)
-    train <- 1:round(0.8*T)
-    train.reg <- as.matrix(final_product[train,-1])
-    train.signal <- as.matrix(final_product[train,1])-1
-    valid.reg <- as.matrix(final_product[-train,-1])
-    valid.signal <- as.matrix(final_product[-train,1])-1
+    train <- 1:round(0.8*nrow(treinar))
+    train.reg <- as.matrix(treinar[train,-1])
+    train.signal <- as.matrix(treinar[train,1])-1
+    valid.reg <- as.matrix(treinar[-train,-1])
+    valid.signal <- as.matrix(treinar[-train,1])-1
 
     
     
+    
     dtrain = xgb.DMatrix(data = train.reg, label = train.signal)
+    
     numberOfClasses <- length(unique(signal))
     ##############################
     
@@ -441,7 +447,7 @@ for (round_assets in 1:number_assets) {
     xgb_params <- list("objective" = "multi:softprob",
                        "eval_metric" = "mlogloss",
                        "num_class" = numberOfClasses)
-    nround    <- 100 # number of XGBoost rounds
+    nround    <- 50 # number of XGBoost rounds
     cv.nfold  <- 5
     # Fit cv.nfold * cv.nround XGB models and save OOF predictions
     cv_model <- xgb.cv(params = xgb_params,
@@ -484,15 +490,15 @@ for (round_assets in 1:number_assets) {
     c <- confusionMatrix(factor(test_prediction$label),
                          factor(test_prediction$max_prob),
                          mode = "everything")
-    #print(c)
+    print(c)
     #names <-  colnames(lag.matrix)
     #importance_matrix = xgb.importance(feature_names = names, model = xgModel)
     #gp = xgb.plot.importance(importance_matrix)
     #print(gp)
-    colnames(resumo)<-colnames(c$byClass)
-    resumo[agregacao,1:11]<-c$byClass[1,1:11]
-    resumo[agregacao,12:22]<-c$byClass[3,1:11]
-    resumo[agregacao,23:29]<-c$overall
+    
+    resumo[agregacao,1:11]<-t(c$byClass[1,1:11])
+    resumo[agregacao,12:22]<-t(c$byClass[3,1:11])
+    resumo[agregacao,23:29]<-t(c$overall)
     
     rm(final_product)
   }
@@ -507,3 +513,4 @@ plot.ts(resumo["Specificity sell"])
 plot.ts(resumo["Precision buy"])
 plot.ts(resumo["Precision sell"])
 
+        
