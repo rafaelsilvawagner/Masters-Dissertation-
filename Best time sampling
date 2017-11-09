@@ -60,7 +60,7 @@ dimnames(resumo)<-list(assets,
 
 
 #você vai fazer a análise um ativo de cada vez
-for (round_assets in 1:number_assets) {
+for (round_assets in 1:number_assets){
   asset<-assets[round_assets]
   #faz pra uma dada agregação
   for(agregacao in 1:agregacao_maxima){
@@ -114,6 +114,7 @@ for (round_assets in 1:number_assets) {
         
         trades_agg<-data.frame(matrix(0, nrow = length(sequencia_temporal), ncol = ncol(trades_agg_1sec)))
         rownames(trades_agg)<-sequencia_temporal
+        
         colnames(trades_agg)<-colnames(trades_agg_1sec)
         
         #preenche as variáveis com relação a estrutura temporal
@@ -164,23 +165,31 @@ for (round_assets in 1:number_assets) {
           trades_agg$period.ret[1]<-first(trades_raw$TradePrice)/last(subcon$TradePrice)-1
           
           #monta uma seq pra amostrar  a variancia
-          sequencia_vol=data.frame(seq(from=trades_agg$TradeDateTime[1]-agregacao*salto,
+          sequencia_vol=data.frame(seq(from=trades_agg$TradeDateTime[1]-agregacao*salto+salto,
                                  to=trades_agg$TradeDateTime[1],
-                                 by=paste(agregacao,"sec")))
+                                 by=paste(agregacao*6,"sec")))
           sequencia_vol[,2]=0
           
-          sub_var$last.price<-first(trades_raw$TradePrice)
+          
+          open<-0
           for (j in 1:nrow(sequencia_vol)){
-            if(nrow(subset(trades_agg_1sec,TradeDateTime<=sequencia_vol[j,1]))>0){
+            if(nrow(subset(trades_agg_1sec,TradeDateTime<=as.POSIXct(sequencia_vol[j,1])))>0){
+              open<-5
               sub_var<-subset(trades_agg_1sec,TradeDateTime<=sequencia_vol[j,1])
               sequencia_vol[j,2]<-last(sub_var$last.price)
             } else {
-              sequencia_vol[j,2]<-last(sub_var$last.price)
+              if(open==5){
+                sequencia_vol[j,2]<-last(sub_var$last.price)
+              } else{
+                sequencia_vol[j,2]<-first(trades_raw$TradePrice)
+              }
+              
             }
           }
+          
           sequencia_vol<-xts(sequencia_vol[,2],order.by=sequencia_vol[,1])
           trades_agg$period.ret.volat[1]<-minRV(rdata=sequencia_vol,align.by ="secs",
-                                               align.period=agregacao,makeReturns=TRUE)
+                                               align.period=agregacao*6,makeReturns=TRUE)
           
                     #recupera buys
           if(nrow(subset(subcon,TradeSign==1))>0){
@@ -220,21 +229,27 @@ for (round_assets in 1:number_assets) {
             #monta uma seq pra amostrar  a variancia
             sequencia_vol=data.frame(seq(from=trades_agg$TradeDateTime[i]-agregacao*salto,
                                          to=trades_agg$TradeDateTime[i],
-                                         by=paste(agregacao,"sec")))
+                                         by=paste(agregacao*6,"sec")))
             sequencia_vol[,2]=0
             
+            open<-0
             for (j in 1:nrow(sequencia_vol)){
-              if(nrow(subset(trades_agg_1sec,TradeDateTime<=sequencia_vol[j,1]))>0){
+              if(nrow(subset(trades_agg_1sec,TradeDateTime<=as.POSIXct(sequencia_vol[j,1])))>0){
+                open<-5
                 sub_var<-subset(trades_agg_1sec,TradeDateTime<=sequencia_vol[j,1])
                 sequencia_vol[j,2]<-last(sub_var$last.price)
               } else {
-                sequencia_vol[j,2]<-last(sub_var$last.price)
+                if(open==5){
+                  sequencia_vol[j,2]<-last(sub_var$last.price)
+                } else{
+                  sequencia_vol[j,2]<-first(subcon$TradePrice)
+                }
               }
             }
             
             sequencia_vol<-xts(sequencia_vol[,2],order.by=sequencia_vol[,1])
             trades_agg$period.ret.volat[i]<-minRV(rdata=sequencia_vol,align.by ="secs",
-                                                 align.period=agregacao,makeReturns=TRUE)
+                                                 align.period=agregacao*6,makeReturns=TRUE)
             
             
             #recupera buys
@@ -393,20 +408,20 @@ for (round_assets in 1:number_assets) {
         max.lags <- 4
 
         
-        defasada<-dados[(max.lags*agregacao+1):nrow(dados),]
+        defasada<-dados[(max.lags*agregacao+1):(nrow(dados)-agregacao),]
         defasada<-defasada[,-which(names(defasada) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
         names<-colnames(defasada)
         
         for(i in 1:max.lags){
-          def<-dados[((max.lags-i)*agregacao+1):(nrow(dados)-i*agregacao),
+          def<-dados[((max.lags-i)*agregacao+1):(nrow(dados)-(i+1)*agregacao),
                      -which(names(dados) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
           colnames(def)<-paste(names,"defasagem",i,sep=".")
           defasada<-cbind(defasada,def)
         }
         
         # Vetor de variável dependente atual
-        direction<-as.matrix(as.numeric(signal))[(max.lags*agregacao+1+1):nrow(dados),]
-        completa<-cbind(direction,defasada[-nrow(defasada),])
+        direction<-as.matrix(as.numeric(signal))[(max.lags*agregacao+agregacao+1):length(signal),]
+        completa<-cbind(direction,defasada[-(1+nrow(defasada))])
 
 
   
@@ -549,6 +564,7 @@ for (round_assets in 1:number_assets) {
     #rm(final_product)
   }
   #Fazer estimação
+}
 }
 
 par(mfrow=c(3,2))
