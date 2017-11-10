@@ -37,8 +37,8 @@ contents<-ghfd_get_ftp_contents(type.market="equity")
 #Define quanto dos ultimos dias atualizados você vai querer
 trading_days<-100
 #aponta o primeiro e o ultimo dia de analise
-last.date<-tail(contents$dates,1)
-first.date<-contents$dates[nrow(contents)-trading_days]
+last.date<-contents$dates[nrow(contents)-6]
+first.date<-contents$dates[nrow(contents)-trading_days-5]
 dates<-contents$dates[which(contents$dates == last.date):which(contents$dates == first.date)]
 
 #Define o nivel de agregação e o tipo de agregação máxima que você vai querer
@@ -49,21 +49,39 @@ agregacao_minima<-sprintf("1 %s",tipo_agregacao)
 #salto é a agregacao_minima em segundos
 salto=60
 
-resumo<-array(0,dim=c(3,6,60))
 
-dimnames(resumo)<-list(assets,
-                       c(paste(c("Precision Buy","Precision Sell","Precision Buy Only","Precision Sell Only",
-                         "Precision General","Precision General Only"),"XGBOOST")
-                       #paste(c("Precision Buy","Precision Sell","Precision Buy Only","Precision Sell Only",
-                       #  "Precision General","Precision General Only"),"MLOGIT")),
-                       ),1:60)
+#######Cria as matrizes que vão guardar as informações de análise
+overall<-array(0,dim=c(7,number_assets,agregacao_maxima))
+byClass<-array(0,dim=c(33,number_assets,agregacao_maxima))
+importance<-array(0,dim=c(150,number_assets,agregacao_maxima))
+names_overall<-c("Accuracy","Kappa","AcuracyLower","AccuracyUpper","AccuracyNull","AccuracyPValue","McnemarPValue")
+names<-c("Sensitivity","Specificity","Pos Pred Value","Neg Pred Value","Precision","Recall","F1","Prevalence","Detection Rate","Detection Prevalence","Balanced Accuracy")
+names_byClass<-c(paste(names,c("Class 1")),
+                 paste(names,c("Class 2")),
+                 paste(names,c("Class 3")))
 
+names_import<-c("direction","signal","n.trades","last.price","weighted.price","period.ret",                        
+"period.ret.volat","sum.qtd","sum.vol","n.buys","n.sells","time_opening",                      
+"vol.buys","vol.sells","weighted.price.buys","weighted.price.sells","n.order.buy","avg.order.price.buy",             
+"max.order.price.buy","min.order.price.buy","n.new.order.buy","n.update.order.buy","n.cancelled.order.buy","n.order.sell",                      
+"avg.order.price.sell","max.order.price.sell","min.order.price.sell","n.new.order.sell","n.update.order.sell","n.cancelled.order.sell")
+names_importance<-c(paste(names_import),paste(names_import,c(".defasagem.1"),sep=""),paste(names_import,c(".defasagem.2"),sep=""),
+                paste(names_import,c(".defasagem.3"),sep=""),paste(names_import,c(".defasagem.4"),sep=""))
+
+dimnames(byClass)<-list(names_byClass,assets,1:60)
+dimnames(overall)<-list(names_overall,assets,1:60)
+dimnames(importance)<-list(names_importance,assets,1:60)
+
+
+cross_validation<-1:1000
 
 #você vai fazer a análise um ativo de cada vez
 for (round_assets in 1:number_assets){
   asset<-assets[round_assets]
   #faz pra uma dada agregação
-  for(agregacao in 1:agregacao_maxima){
+  #agregacoes<-1:agregacao_maxima
+  agregacoes<-c(10,20,30,40,50,60)
+  for(agregacao in agregacoes){
     #todos os dias
     for(round in 1:trading_days) {
       print(paste(asset,agregacao,round))  
@@ -109,12 +127,11 @@ for (round_assets in 1:number_assets){
         
         #Controi o vetor que servirá de base para todos os outros
         sequencia_temporal=seq(from=(round.POSIXt(as.POSIXct(paste(date,first(trades_agg_1sec$Tradetime))),tipo_agregacao)+agregacao*salto),
-                               to=as.POSIXct(paste(date,last(trades_agg_1sec$Tradetime))),
+                               to=round.POSIXt(as.POSIXct(paste(date,last(trades_agg_1sec$Tradetime)))),
                                by=agregacao_minima)
         
         trades_agg<-data.frame(matrix(0, nrow = length(sequencia_temporal), ncol = ncol(trades_agg_1sec)))
         rownames(trades_agg)<-sequencia_temporal
-        
         colnames(trades_agg)<-colnames(trades_agg_1sec)
         
         #preenche as variáveis com relação a estrutura temporal
@@ -147,7 +164,8 @@ for (round_assets in 1:number_assets){
         #Preenche os valores da primeira linha
         if(nrow(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[1] &
            TradeDateTime>(trades_agg$TradeDateTime[1]-agregacao*salto)))>0){
-          subcon<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[1])
+          subcon<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[1] &
+                           TradeDateTime>(trades_agg$TradeDateTime[1]-agregacao*salto))
           
           #preenche as variáveis mais simples
           #o numero de negócios é o numero de linhas
@@ -165,7 +183,7 @@ for (round_assets in 1:number_assets){
           trades_agg$period.ret[1]<-first(trades_raw$TradePrice)/last(subcon$TradePrice)-1
           
           #monta uma seq pra amostrar  a variancia
-          sequencia_vol=data.frame(seq(from=trades_agg$TradeDateTime[1]-agregacao*salto+salto,
+          sequencia_vol=data.frame(seq(from=trades_agg$TradeDateTime[1]-agregacao*salto,
                                  to=trades_agg$TradeDateTime[1],
                                  by=paste(agregacao*6,"sec")))
           sequencia_vol[,2]=0
@@ -191,7 +209,7 @@ for (round_assets in 1:number_assets){
           trades_agg$period.ret.volat[1]<-minRV(rdata=sequencia_vol,align.by ="secs",
                                                align.period=agregacao*6,makeReturns=TRUE)
           
-                    #recupera buys
+          #recupera buys
           if(nrow(subset(subcon,TradeSign==1))>0){
             trades_agg$n.buys[1]<-nrow(subset(subcon,TradeSign==1))
             trades_agg$vol.buys[1]<-sum(subset(subcon,TradeSign==1)["TradePrice"]*subset(subcon,TradeSign==1)["TradedQuantity"])
@@ -231,6 +249,7 @@ for (round_assets in 1:number_assets){
                                          to=trades_agg$TradeDateTime[i],
                                          by=paste(agregacao*6,"sec")))
             sequencia_vol[,2]=0
+            
             
             open<-0
             for (j in 1:nrow(sequencia_vol)){
@@ -463,9 +482,17 @@ for (round_assets in 1:number_assets){
                        nfold = cv.nfold,
                        verbose = FALSE,
                        prediction = TRUE)
-    best<-which(min(log(cv_model$evaluation_log$test_mlogloss_mean))==log(cv_model$evaluation_log$test_mlogloss_mean))
     
-    #plot(log(cv_model$evaluation_log$test_mlogloss_mean))
+    
+    
+    cv<-(cv_model$evaluation_log$test_mlogloss_mean)
+    min<-which(min(cv)==cv)
+    dp<-cv_model$evaluation_log$test_mlogloss_std[min]
+    best<-which.max(cv < (min+dp))
+    #cross_validation<-cbind(cross_validation,cv_model$evaluation_log$test_mlogloss_mean)
+    #best<-first((min+dp)!=(cv_model$evaluation_log$test_mlogloss_mean))
+    
+    plot(as.ts(cbind(cv_model$evaluation_log$train_mlogloss_mean,cv_model$evaluation_log$test_mlogloss_mean)))
     
     #OOF_prediction <- data.frame(cv_model$pred) %>%
     #  mutate(max_prob = max.col(., ties.method = "last"),
@@ -504,8 +531,8 @@ for (round_assets in 1:number_assets){
     #names(c)
     #c$table
     #print(c)
-    #names <-  colnames(lag.matrix)
-    #importance_matrix = xgb.importance(feature_names = names, model = xgModel)
+    names <-  colnames(train.reg)
+    importance_matrix = xgb.importance(feature_names = names, model = xgModel)
     #gp = xgb.plot.importance(importance_matrix)
     #print(gp)
     
@@ -513,6 +540,11 @@ for (round_assets in 1:number_assets){
                                 c$table[3,3]/sum(c$table[3,]),c$table[3,3]/sum(c$table[3,1]),
                                 sum(diag(c$table[1,1]))/sum(c$table[1,]),c$table[1,1]/sum(c$table[1,3]))
     
+    byClass[,round_assets,agregacao]<-t(c$byClass)
+    overall[,round_assets,agregacao]<-t(c$overall)
+    importance_loop<- importance_matrix$Importance[match(row.names(data.frame(importance[,round_assets,agregacao])), importance_matrix$Feature)]
+    importance_loop<-replace(importance_loop,is.na(importance_loop),0)
+    importance[,round_assets,agregacao]<-importance_loop
     
     #train.all<-data.frame(treinar[train,])
     #valid.all<-data.frame(treinar[-train,])
@@ -561,11 +593,11 @@ for (round_assets in 1:number_assets){
     #head(model.frame.default(f1, train.logit, lhs = NULL, rhs = NULL))
     #logit_estimado<-mlogit(formula=f1,data=train.logit,ftol=1e-30,gtol=1e-30)
     
-    #rm(final_product)
+    rm(final_product)
   }
   #Fazer estimação
 }
-}
+
 
 par(mfrow=c(3,2))
 plot.ts(resumo["Sensitivity buy"])
@@ -575,4 +607,10 @@ plot.ts(resumo["Specificity sell"])
 plot.ts(resumo["Precision buy"])
 plot.ts(resumo["Precision sell"])
 
-cross_validation[,3]<-log(cv_model$evaluation_log$test_mlogloss_mean)[,2]
+c$overall
+c$byClass
+
+importance.matrix
+
+cross_validation<-log(cv_model$evaluation_log$test_mlogloss_mean)
+write.csv(cross_validation,"C://Users//rwagn//Documents//R//Econometria 2//validacao")
