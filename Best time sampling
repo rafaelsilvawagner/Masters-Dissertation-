@@ -12,6 +12,7 @@ library(dplyr)
 library(lubridate)
 library(Weighted.Desc.Stat)
 library(chron)
+library(e1071)
 library(highfrequency)
 library(ggplot2)
 library(tictoc)
@@ -21,10 +22,17 @@ library(glmnet)
 library(caret)
 library(mlogit)
 library(zoo)
+library(foreach)
+library(doParallel)
 library(SDMTools)
+registerDoParallel()
+
+packages=c("GetHFData","plyr","dplyr","lubridate","Weighted.Desc.Stat","chron","highfrequency","ggplot2",
+           "data.table","xgboost","glmnet","caret","mlogit","zoo","foreach","doParallel","SDMTools"
+)
 
 #Defina os ativos e o tipo de mercado que você irá analisar
-assets=c("PETR4","VALE5","ABEV3")
+assets=c("PETR4")
 number_assets=length(assets)
 type.market="equity"
 
@@ -37,8 +45,10 @@ contents<-ghfd_get_ftp_contents(type.market="equity")
 #Define quanto dos ultimos dias atualizados você vai querer
 trading_days<-100
 #aponta o primeiro e o ultimo dia de analise
-last.date<-contents$dates[nrow(contents)-6]
-first.date<-contents$dates[nrow(contents)-trading_days-5]
+#last.date<-contents$dates[nrow(contents)-6]
+last.date<-as.Date("2017-10-16")
+#first.date<-contents$dates[nrow(contents)-trading_days-5]
+first.date<-as.Date("2017-05-25")
 dates<-contents$dates[which(contents$dates == last.date):which(contents$dates == first.date)]
 
 #Define o nivel de agregação e o tipo de agregação máxima que você vai querer
@@ -51,9 +61,9 @@ salto=60
 
 
 #######Cria as matrizes que vão guardar as informações de análise
-overall<-array(0,dim=c(7,number_assets,agregacao_maxima))
-byClass<-array(0,dim=c(33,number_assets,agregacao_maxima))
-importance<-array(0,dim=c(150,number_assets,agregacao_maxima))
+overall<-array(0,dim=c(7,agregacao_maxima))
+byClass<-array(0,dim=c(33,agregacao_maxima))
+importance<-array(0,dim=c(150,agregacao_maxima))
 names_overall<-c("Accuracy","Kappa","AcuracyLower","AccuracyUpper","AccuracyNull","AccuracyPValue","McnemarPValue")
 names<-c("Sensitivity","Specificity","Pos Pred Value","Neg Pred Value","Precision","Recall","F1","Prevalence","Detection Rate","Detection Prevalence","Balanced Accuracy")
 names_byClass<-c(paste(names,c("Class 1")),
@@ -61,131 +71,201 @@ names_byClass<-c(paste(names,c("Class 1")),
                  paste(names,c("Class 3")))
 
 names_import<-c("direction","signal","n.trades","last.price","weighted.price","period.ret",                        
-"period.ret.volat","sum.qtd","sum.vol","n.buys","n.sells","time_opening",                      
-"vol.buys","vol.sells","weighted.price.buys","weighted.price.sells","n.order.buy","avg.order.price.buy",             
-"max.order.price.buy","min.order.price.buy","n.new.order.buy","n.update.order.buy","n.cancelled.order.buy","n.order.sell",                      
-"avg.order.price.sell","max.order.price.sell","min.order.price.sell","n.new.order.sell","n.update.order.sell","n.cancelled.order.sell")
+                "period.ret.volat","sum.qtd","sum.vol","n.buys","n.sells","time_opening",                      
+                "vol.buys","vol.sells","weighted.price.buys","weighted.price.sells","n.order.buy","avg.order.price.buy",             
+                "max.order.price.buy","min.order.price.buy","n.new.order.buy","n.update.order.buy","n.cancelled.order.buy","n.order.sell",                      
+                "avg.order.price.sell","max.order.price.sell","min.order.price.sell","n.new.order.sell","n.update.order.sell","n.cancelled.order.sell")
 names_importance<-c(paste(names_import),paste(names_import,c(".defasagem.1"),sep=""),paste(names_import,c(".defasagem.2"),sep=""),
-                paste(names_import,c(".defasagem.3"),sep=""),paste(names_import,c(".defasagem.4"),sep=""))
+                    paste(names_import,c(".defasagem.3"),sep=""),paste(names_import,c(".defasagem.4"),sep=""))
 
-dimnames(byClass)<-list(names_byClass,assets,1:60)
-dimnames(overall)<-list(names_overall,assets,1:60)
-dimnames(importance)<-list(names_importance,assets,1:60)
+dimnames(byClass)<-list(names_byClass,1:60)
+dimnames(overall)<-list(names_overall,1:60)
+dimnames(importance)<-list(names_importance,1:60)
 
 
-cross_validation<-1:1000
-
+cross_validation<-1:200
 #você vai fazer a análise um ativo de cada vez
-for (round_assets in 1:number_assets){
-  asset<-assets[round_assets]
-  #faz pra uma dada agregação
-  #agregacoes<-1:agregacao_maxima
-  agregacoes<-c(10,20,30,40,50,60)
-  for(agregacao in agregacoes){
+#for (round_assets in 1:number_assets){
+asset<-assets[1]
+#faz pra uma dada agregação
+#agregacoes<-1:agregacao_maxima
+agregacoes<-31:40
+for(agregacao in agregacoes){
+  if(file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//bases//base %s.csv",agregacao))){
+    final_product<-read.csv(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//bases//base %s.csv",agregacao))
+    datas<-final_product[,1]
+    final_product<-final_product[,-1]
+    
+    rownames(final_product)<-datas
+  } else {
     #todos os dias
-    for(round in 1:trading_days) {
+    #for(round in 1:trading_days) {
+    for(round in 1:100) {
+      
       print(paste(asset,agregacao,round))  
       date<-dates[round]
-        time<-"1 sec"
-        #############################
-        ##Pega Dados
-        ############################
-        #Get trades data by raw
-        if(file.exists(sprintf("H://treated_variables//times and trades//agg//%s//%s//%s.csv",time,asset,date))){
-          trades_agg_1sec <- read.csv(sprintf("H://treated_variables//times and trades//agg//%s//%s//%s.csv",time,asset,date),header=TRUE)
-          trades_agg_1sec<- trades_agg_1sec[1:nrow(trades_agg_1sec)-1,2:ncol(trades_agg_1sec)]
-        } else {trades_agg_1sec<-ghfd_get_HF_data(my.assets=asset,type.market=type.market,type.data="trades",
-          first.date=date,last.date=date,type.output="agg",agg.diff = time,
-          first.time =first.time,last.time =last.time,
-          dl.dir = "H://ftp.bmf.com.br//MarketData//Bovespa-Vista")
-          write.csv(trades_agg_1sec,sprintf("H://treated_variables//times and trades//agg//%s//%s//%s.csv",time,asset,date))
+      time<-"1 sec"
+      #############################
+      ##Pega Dados
+      ############################
+      #Get trades data by raw
+      if(file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//times and trades//agg//%s//%s//%s.csv",time,asset,date))){
+        trades_agg_1sec <- read.csv(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//times and trades//agg//%s//%s//%s.csv",time,asset,date),header=TRUE)
+        trades_agg_1sec<- trades_agg_1sec[1:nrow(trades_agg_1sec)-1,2:ncol(trades_agg_1sec)]
+      } else {trades_agg_1sec<-ghfd_get_HF_data(my.assets=asset,type.market=type.market,type.data="trades",
+                                                first.date=date,last.date=date,type.output="agg",agg.diff = time,
+                                                first.time =first.time,last.time =last.time,
+                                                dl.dir = "C://Users//Usuario//Desktop//Rafael - Dissertação//ftp.bmf.com.br//MarketData//Bovespa-Vista")
+      write.csv(trades_agg_1sec,sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//times and trades//agg//%s//%s//%s.csv",time,asset,date))
+      }
+      
+      #Get trades data aggregated
+      if(file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//times and trades//raw//%s//%s//%s.csv",time,asset,date))){
+        trades_raw <- read.csv(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//times and trades//raw//%s//%s//%s.csv",time,asset,date))
+        trades_raw<-trades_raw[,2:ncol(trades_raw)]
+      } else {trades_raw<-ghfd_get_HF_data(my.assets=asset,type.market=type.market,type.data="trades",
+                                           first.date=date,last.date=date,type.output="raw",agg.diff = time,
+                                           first.time =first.time,last.time =last.time,
+                                           dl.dir = "C://Users//Usuario//Desktop//Rafael - Dissertação//ftp.bmf.com.br//MarketData//Bovespa-Vista")
+      write.csv(trades_raw,sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//times and trades//raw//%s//%s//%s.csv",time,asset,date))
+      }
+      
+      
+      #############################
+      ##Transforma Dados Temporalmente
+      ############################
+      #coloca TradeTime em chron
+      trades_raw$Tradetime<-chron(times=trades_raw$Tradetime)
+      trades_agg_1sec$Tradetime<-chron(times=trades_agg_1sec$Tradetime)
+      
+      
+      #coloca TradeDateTime em Posix
+      trades_raw$TradeDateTime<-as.POSIXct(trades_raw$TradeDateTime)
+      trades_agg_1sec$TradeDateTime<-as.POSIXct(trades_agg_1sec$TradeDateTime)
+      
+      #Controi o vetor que servirá de base para todos os outros
+      sequencia_temporal=seq(from=(round.POSIXt(as.POSIXct(paste(date,first(trades_agg_1sec$Tradetime))),tipo_agregacao)+agregacao*salto),
+                             to=round.POSIXt(as.POSIXct(paste(date,last(trades_agg_1sec$Tradetime)))),
+                             by=agregacao_minima)
+      
+      trades_agg<-data.frame(matrix(0, nrow = length(sequencia_temporal), ncol = ncol(trades_agg_1sec)))
+      rownames(trades_agg)<-sequencia_temporal
+      colnames(trades_agg)<-colnames(trades_agg_1sec)
+      
+      #preenche as variáveis com relação a estrutura temporal
+      trades_agg$InstrumentSymbol<-asset
+      trades_agg$SessionDate<-date
+      trades_agg$TradeDateTime<-sequencia_temporal
+      trades_agg$Tradetime<-chron(times=strftime(sequencia_temporal, format="%H:%M:%S"))
+      
+      #cria uma nova variável chamada segundos desde as 09:00:00
+      trades_agg$time_opening<-as.numeric(trades_agg$TradeDateTime)-
+        as.numeric(as.POSIXct(paste(date,"09:00:00")))
+      
+      
+      
+      
+      #cria colunas pra guardar 4 variáveis que criaremos do Times and Trades
+      
+      trades_agg[,ncol(trades_agg)+1]=0
+      names(trades_agg)[ncol(trades_agg)]<-"vol.buys"
+      
+      trades_agg[,ncol(trades_agg)+1]=0
+      names(trades_agg)[ncol(trades_agg)]<-"vol.sells"
+      
+      trades_agg[,ncol(trades_agg)+1]=0
+      names(trades_agg)[ncol(trades_agg)]<-"weighted.price.buys"    
+      
+      trades_agg[,ncol(trades_agg)+1]=0
+      names(trades_agg)[ncol(trades_agg)]<-"weighted.price.sells"
+      
+      #Preenche os valores da primeira linha
+      if(nrow(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[1] &
+                     TradeDateTime>(trades_agg$TradeDateTime[1]-agregacao*salto)))>0){
+        subcon<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[1] &
+                         TradeDateTime>(trades_agg$TradeDateTime[1]-agregacao*salto))
+        
+        #preenche as variáveis mais simples
+        #o numero de negócios é o numero de linhas
+        trades_agg$n.trades[1]<-nrow(subcon)
+        #o volume de cada negócio está na coluna TradedQuantity, se você somá-la voce tera a quantidade negociada
+        trades_agg$sum.qtd[1]<-sum(subcon$TradedQuantity)
+        #tendo a quantidade negociada e sabendo o preço que cada uma foi negociada podemos chegar ao volume negociado
+        trades_agg$sum.vol[1]<-sum(subcon$TradedQuantity*subcon$TradePrice)
+        #o ultimo preço dessa linha será o ultimo preço negociado no período
+        trades_agg$last.price[1]<-last(subcon$TradePrice)
+        #o preço ponderado são os preços ponderados pela respectiva quantidade negociada
+        trades_agg$weighted.price[1]<-wt.mean(x=(subcon$TradePrice),wt=subcon$TradedQuantity)
+        
+        #acha o primeiro retorno
+        trades_agg$period.ret[1]<-first(trades_raw$TradePrice)/last(subcon$TradePrice)-1
+        
+        #monta uma seq pra amostrar  a variancia
+        sequencia_vol=data.frame(seq(from=trades_agg$TradeDateTime[1]-agregacao*salto,
+                                     to=trades_agg$TradeDateTime[1],
+                                     by=paste(agregacao*6,"sec")))
+        sequencia_vol[,2]=0
+        
+        
+        open<-0
+        for (j in 1:nrow(sequencia_vol)){
+          if(nrow(subset(trades_agg_1sec,TradeDateTime<=as.POSIXct(sequencia_vol[j,1])))>0){
+            open<-5
+            sub_var<-subset(trades_agg_1sec,TradeDateTime<=sequencia_vol[j,1])
+            sequencia_vol[j,2]<-last(sub_var$last.price)
+          } else {
+            if(open==5){
+              sequencia_vol[j,2]<-last(sub_var$last.price)
+            } else{
+              sequencia_vol[j,2]<-first(trades_raw$TradePrice)
+            }
+            
+          }
         }
-          
-        #Get trades data aggregated
-        if(file.exists(sprintf("H://treated_variables//times and trades//raw//%s//%s//%s.csv",time,asset,date))){
-          trades_raw <- read.csv(sprintf("H://treated_variables//times and trades//raw//%s//%s//%s.csv",time,asset,date))
-          trades_raw<-trades_raw[,2:ncol(trades_raw)]
-        } else {trades_raw<-ghfd_get_HF_data(my.assets=asset,type.market=type.market,type.data="trades",
-          first.date=date,last.date=date,type.output="raw",agg.diff = time,
-          first.time =first.time,last.time =last.time,
-          dl.dir = "H://ftp.bmf.com.br//MarketData//Bovespa-Vista")
-          write.csv(trades_raw,sprintf("H://treated_variables//times and trades//raw//%s//%s//%s.csv",time,asset,date))
+        
+        sequencia_vol<-xts(sequencia_vol[,2],order.by=sequencia_vol[,1])
+        trades_agg$period.ret.volat[1]<-minRV(rdata=sequencia_vol,align.by ="secs",
+                                              align.period=agregacao*6,makeReturns=TRUE)
+        
+        #recupera buys
+        if(nrow(subset(subcon,TradeSign==1))>0){
+          trades_agg$n.buys[1]<-nrow(subset(subcon,TradeSign==1))
+          trades_agg$vol.buys[1]<-sum(subset(subcon,TradeSign==1)["TradePrice"]*subset(subcon,TradeSign==1)["TradedQuantity"])
+          trades_agg$weighted.price.buys[1]<-wt.mean(x=subset(subcon,TradeSign==1)$TradePrice,wt=subset(subcon,TradeSign==1)$TradedQuantity)
         }
+        #recupera sells
+        if(nrow(subset(subcon,TradeSign==-1))>0){
+          trades_agg$n.sells[1]<-nrow(subset(subcon,TradeSign==-1))
+          trades_agg$vol.sells[1]<-sum(subset(subcon,TradeSign==-1)["TradePrice"]*subset(subcon,TradeSign==-1)["TradedQuantity"])
+          trades_agg$weighted.price.sells[1]<-wt.mean(x=subset(subcon,TradeSign==-1)$TradePrice,wt=subset(subcon,TradeSign==-1)$TradedQuantity)
+        }
+        rm(subcon)
+      }
+      
+      
+      #recupera as informações tomando como base o times and trades por linha
+      for (i in 2:nrow(trades_agg)){
+        if(nrow(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i] &
+                       TradeDateTime>(trades_agg$TradeDateTime[i-1]-agregacao*salto+salto)))>0){
           
-        
-        #############################
-        ##Transforma Dados Temporalmente
-        ############################
-        #coloca TradeTime em chron
-        trades_raw$Tradetime<-chron(times=trades_raw$Tradetime)
-        trades_agg_1sec$Tradetime<-chron(times=trades_agg_1sec$Tradetime)
-        
-        
-        #coloca TradeDateTime em Posix
-        trades_raw$TradeDateTime<-as.POSIXct(trades_raw$TradeDateTime)
-        trades_agg_1sec$TradeDateTime<-as.POSIXct(trades_agg_1sec$TradeDateTime)
-        
-        #Controi o vetor que servirá de base para todos os outros
-        sequencia_temporal=seq(from=(round.POSIXt(as.POSIXct(paste(date,first(trades_agg_1sec$Tradetime))),tipo_agregacao)+agregacao*salto),
-                               to=round.POSIXt(as.POSIXct(paste(date,last(trades_agg_1sec$Tradetime)))),
-                               by=agregacao_minima)
-        
-        trades_agg<-data.frame(matrix(0, nrow = length(sequencia_temporal), ncol = ncol(trades_agg_1sec)))
-        rownames(trades_agg)<-sequencia_temporal
-        colnames(trades_agg)<-colnames(trades_agg_1sec)
-        
-        #preenche as variáveis com relação a estrutura temporal
-        trades_agg$InstrumentSymbol<-asset
-        trades_agg$SessionDate<-date
-        trades_agg$TradeDateTime<-sequencia_temporal
-        trades_agg$Tradetime<-chron(times=strftime(sequencia_temporal, format="%H:%M:%S"))
-        
-        #cria uma nova variável chamada segundos desde as 09:00:00
-        trades_agg$time_opening<-as.numeric(trades_agg$TradeDateTime)-
-                                              as.numeric(as.POSIXct(paste(date,"09:00:00")))
-        
-        
-    
-
-        #cria colunas pra guardar 4 variáveis que criaremos do Times and Trades
-        
-        trades_agg[,ncol(trades_agg)+1]=0
-        names(trades_agg)[ncol(trades_agg)]<-"vol.buys"
-        
-        trades_agg[,ncol(trades_agg)+1]=0
-        names(trades_agg)[ncol(trades_agg)]<-"vol.sells"
-        
-        trades_agg[,ncol(trades_agg)+1]=0
-        names(trades_agg)[ncol(trades_agg)]<-"weighted.price.buys"    
-        
-        trades_agg[,ncol(trades_agg)+1]=0
-        names(trades_agg)[ncol(trades_agg)]<-"weighted.price.sells"
-        
-        #Preenche os valores da primeira linha
-        if(nrow(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[1] &
-           TradeDateTime>(trades_agg$TradeDateTime[1]-agregacao*salto)))>0){
-          subcon<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[1] &
-                           TradeDateTime>(trades_agg$TradeDateTime[1]-agregacao*salto))
+          subcon<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i] &
+                           TradeDateTime>(trades_agg$TradeDateTime[i-1]-(agregacao*salto)+salto))
           
-          #preenche as variáveis mais simples
-          #o numero de negócios é o numero de linhas
-          trades_agg$n.trades[1]<-nrow(subcon)
-          #o volume de cada negócio está na coluna TradedQuantity, se você somá-la voce tera a quantidade negociada
-          trades_agg$sum.qtd[1]<-sum(subcon$TradedQuantity)
-          #tendo a quantidade negociada e sabendo o preço que cada uma foi negociada podemos chegar ao volume negociado
-          trades_agg$sum.vol[1]<-sum(subcon$TradedQuantity*subcon$TradePrice)
-          #o ultimo preço dessa linha será o ultimo preço negociado no período
-          trades_agg$last.price[1]<-last(subcon$TradePrice)
-          #o preço ponderado são os preços ponderados pela respectiva quantidade negociada
-          trades_agg$weighted.price[1]<-wt.mean(x=(subcon$TradePrice),wt=subcon$TradedQuantity)
+          trades_agg$n.trades[i]<-nrow(subcon)
+          trades_agg$sum.qtd[i]<-sum(subcon$TradedQuantity)
+          trades_agg$sum.vol[i]<-sum(subcon$TradedQuantity*subcon$TradePrice)
+          trades_agg$last.price[i]<-last(subcon$TradePrice)
+          trades_agg$weighted.price[i]<-wt.mean(x=(subcon$TradePrice),wt=subcon$TradedQuantity)
           
-          #acha o primeiro retorno
-          trades_agg$period.ret[1]<-first(trades_raw$TradePrice)/last(subcon$TradePrice)-1
+          #define o preço referencia
+          last_price<-last(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i]-agregacao*salto)$TradePrice)
+          trades_agg$period.ret[i]<-(last(subcon$TradePrice)/last_price)-1
+          
           
           #monta uma seq pra amostrar  a variancia
-          sequencia_vol=data.frame(seq(from=trades_agg$TradeDateTime[1]-agregacao*salto,
-                                 to=trades_agg$TradeDateTime[1],
-                                 by=paste(agregacao*6,"sec")))
+          sequencia_vol=data.frame(seq(from=trades_agg$TradeDateTime[i]-agregacao*salto,
+                                       to=trades_agg$TradeDateTime[i],
+                                       by=paste(agregacao*6,"sec")))
           sequencia_vol[,2]=0
           
           
@@ -199,200 +279,138 @@ for (round_assets in 1:number_assets){
               if(open==5){
                 sequencia_vol[j,2]<-last(sub_var$last.price)
               } else{
-                sequencia_vol[j,2]<-first(trades_raw$TradePrice)
+                sequencia_vol[j,2]<-first(subcon$TradePrice)
               }
-              
             }
           }
           
           sequencia_vol<-xts(sequencia_vol[,2],order.by=sequencia_vol[,1])
-          trades_agg$period.ret.volat[1]<-minRV(rdata=sequencia_vol,align.by ="secs",
-                                               align.period=agregacao*6,makeReturns=TRUE)
+          trades_agg$period.ret.volat[i]<-minRV(rdata=sequencia_vol,align.by ="secs",
+                                                align.period=agregacao*6,makeReturns=TRUE)
+          
           
           #recupera buys
           if(nrow(subset(subcon,TradeSign==1))>0){
-            trades_agg$n.buys[1]<-nrow(subset(subcon,TradeSign==1))
-            trades_agg$vol.buys[1]<-sum(subset(subcon,TradeSign==1)["TradePrice"]*subset(subcon,TradeSign==1)["TradedQuantity"])
-            trades_agg$weighted.price.buys[1]<-wt.mean(x=subset(subcon,TradeSign==1)$TradePrice,wt=subset(subcon,TradeSign==1)$TradedQuantity)
+            trades_agg$n.buys[i]<-nrow(subset(subcon,TradeSign==1))
+            trades_agg$vol.buys[i]<-sum(subset(subcon,TradeSign==1)["TradePrice"]*subset(subcon,TradeSign==1)["TradedQuantity"])
+            trades_agg$weighted.price.buys[i]<-wt.mean(x=subset(subcon,TradeSign==1)$TradePrice,wt=subset(subcon,TradeSign==1)$TradedQuantity)
           }
           #recupera sells
           if(nrow(subset(subcon,TradeSign==-1))>0){
-            trades_agg$n.sells[1]<-nrow(subset(subcon,TradeSign==-1))
-            trades_agg$vol.sells[1]<-sum(subset(subcon,TradeSign==-1)["TradePrice"]*subset(subcon,TradeSign==-1)["TradedQuantity"])
-            trades_agg$weighted.price.sells[1]<-wt.mean(x=subset(subcon,TradeSign==-1)$TradePrice,wt=subset(subcon,TradeSign==-1)$TradedQuantity)
+            trades_agg$n.sells[i]<-nrow(subset(subcon,TradeSign==-1))
+            trades_agg$vol.sells[i]<-sum(subset(subcon,TradeSign==-1)["TradePrice"]*subset(subcon,TradeSign==-1)["TradedQuantity"])
+            trades_agg$weighted.price.sells[i]<-wt.mean(x=subset(subcon,TradeSign==-1)$TradePrice,wt=subset(subcon,TradeSign==-1)$TradedQuantity)
           }
           rm(subcon)
+        } else {
+          trades_agg$last.price[i]<-last(trades_agg$last.price[trades_agg$last.price!=0])
         }
-        
-        
-        #recupera as informações tomando como base o times and trades por linha
-        for (i in 2:nrow(trades_agg)){
-          if(nrow(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i] &
-                         TradeDateTime>(trades_agg$TradeDateTime[i-1]-agregacao*salto+salto)))>0){
-            
-            subcon<-subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i] &
-                             TradeDateTime>(trades_agg$TradeDateTime[i-1]-(agregacao*salto)+salto))
-            
-            trades_agg$n.trades[i]<-nrow(subcon)
-            trades_agg$sum.qtd[i]<-sum(subcon$TradedQuantity)
-            trades_agg$sum.vol[i]<-sum(subcon$TradedQuantity*subcon$TradePrice)
-            trades_agg$last.price[i]<-last(subcon$TradePrice)
-            trades_agg$weighted.price[i]<-wt.mean(x=(subcon$TradePrice),wt=subcon$TradedQuantity)
-            
-            #define o preço referencia
-            last_price<-last(subset(trades_raw,TradeDateTime<=trades_agg$TradeDateTime[i]-agregacao*salto)$TradePrice)
-            trades_agg$period.ret[i]<-(last(subcon$TradePrice)/last_price)-1
-            
-            
-            #monta uma seq pra amostrar  a variancia
-            sequencia_vol=data.frame(seq(from=trades_agg$TradeDateTime[i]-agregacao*salto,
-                                         to=trades_agg$TradeDateTime[i],
-                                         by=paste(agregacao*6,"sec")))
-            sequencia_vol[,2]=0
-            
-            
-            open<-0
-            for (j in 1:nrow(sequencia_vol)){
-              if(nrow(subset(trades_agg_1sec,TradeDateTime<=as.POSIXct(sequencia_vol[j,1])))>0){
-                open<-5
-                sub_var<-subset(trades_agg_1sec,TradeDateTime<=sequencia_vol[j,1])
-                sequencia_vol[j,2]<-last(sub_var$last.price)
-              } else {
-                if(open==5){
-                  sequencia_vol[j,2]<-last(sub_var$last.price)
-                } else{
-                  sequencia_vol[j,2]<-first(subcon$TradePrice)
-                }
-              }
-            }
-            
-            sequencia_vol<-xts(sequencia_vol[,2],order.by=sequencia_vol[,1])
-            trades_agg$period.ret.volat[i]<-minRV(rdata=sequencia_vol,align.by ="secs",
-                                                 align.period=agregacao*6,makeReturns=TRUE)
-            
-            
-            #recupera buys
-            if(nrow(subset(subcon,TradeSign==1))>0){
-              trades_agg$n.buys[i]<-nrow(subset(subcon,TradeSign==1))
-              trades_agg$vol.buys[i]<-sum(subset(subcon,TradeSign==1)["TradePrice"]*subset(subcon,TradeSign==1)["TradedQuantity"])
-              trades_agg$weighted.price.buys[i]<-wt.mean(x=subset(subcon,TradeSign==1)$TradePrice,wt=subset(subcon,TradeSign==1)$TradedQuantity)
-            }
-            #recupera sells
-            if(nrow(subset(subcon,TradeSign==-1))>0){
-              trades_agg$n.sells[i]<-nrow(subset(subcon,TradeSign==-1))
-              trades_agg$vol.sells[i]<-sum(subset(subcon,TradeSign==-1)["TradePrice"]*subset(subcon,TradeSign==-1)["TradedQuantity"])
-              trades_agg$weighted.price.sells[i]<-wt.mean(x=subset(subcon,TradeSign==-1)$TradePrice,wt=subset(subcon,TradeSign==-1)$TradedQuantity)
-            }
-            rm(subcon)
-          } else {
-            trades_agg$last.price[i]<-last(trades_agg$last.price[trades_agg$last.price!=0])
-          }
-        }
-  
-        
-
-
-        ############################
-        #PEGA O BOOK
-        ############################
-        
-        #Get book data aggregated
-        if(file.exists(sprintf("H://treated_variables//book//agg//%s//%s//%s.csv",time,asset,date))){
-          book_agg_1sec <- read.csv(sprintf("H://treated_variables//book//agg//%s//%s//%s.csv",time,asset,date),header=TRUE)
-        } else {book_agg_1sec<-ghfd_get_HF_data(my.assets=asset,type.market=type.market,type.data="orders",
-                          first.date=date,last.date=date,type.output="agg",agg.diff=time,
-                          first.time =first.time,last.time =last.time,
-                          dl.dir = "H://ftp.bmf.com.br//MarketData//Bovespa-Vista")
-                write.csv(book_agg_1sec,sprintf("H://treated_variables//book//agg//%s//%s//%s.csv",time,asset,date))
-        }
-        if(colnames(book_agg_1sec)[1]=="X"){
-          book_agg_1sec<-book_agg_1sec[,-1]
-        }
-        book_agg_1sec<-book_agg_1sec[,c(-1,-2)]
-        
-        ###CONTROI O VETOR QUE AGREGARÁ OS DADOS DO BOOK
-        book_agg<-data.frame(matrix(0, nrow = length(sequencia_temporal), ncol = 15))
-        rownames(book_agg)<-sequencia_temporal
-        colnames(book_agg)<-c("OrderDatetime",paste(colnames(book_agg_1sec)[c(-1,-6)],".buy",sep=""),
-                              paste(colnames(book_agg_1sec)[c(-1,-6)],".sell",sep=""))
-        book_agg_1sec$OrderDatetime<-as.POSIXct(book_agg_1sec$OrderDatetime)
-        book_agg$OrderDatetime<-as.POSIXct(sequencia_temporal)
-  
-        
-        ##############################
-        #preenche as colunas com as variáveis que já existiam
-        #############################
+      }
       
+      
+      
+      
+      ############################
+      #PEGA O BOOK
+      ############################
+      
+      #Get book data aggregated
+      if(file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//book//agg//%s//%s//%s.csv",time,asset,date))){
+        book_agg_1sec <- read.csv(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//book//agg//%s//%s//%s.csv",time,asset,date),header=TRUE)
+      } else {book_agg_1sec<-ghfd_get_HF_data(my.assets=asset,type.market=type.market,type.data="orders",
+                                              first.date=date,last.date=date,type.output="agg",agg.diff=time,
+                                              first.time =first.time,last.time =last.time,
+                                              dl.dir = "C://Users//Usuario//Desktop//Rafael - Dissertação//ftp.bmf.com.br//MarketData//Bovespa-Vista")
+      write.csv(book_agg_1sec,sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//book//agg//%s//%s//%s.csv",time,asset,date))
+      }
+      if(colnames(book_agg_1sec)[1]=="X"){
+        book_agg_1sec<-book_agg_1sec[,-1]
+      }
+      book_agg_1sec<-book_agg_1sec[,c(-1,-2)]
+      
+      ###CONTROI O VETOR QUE AGREGARÁ OS DADOS DO BOOK
+      book_agg<-data.frame(matrix(0, nrow = length(sequencia_temporal), ncol = 15))
+      rownames(book_agg)<-sequencia_temporal
+      colnames(book_agg)<-c("OrderDatetime",paste(colnames(book_agg_1sec)[c(-1,-6)],".buy",sep=""),
+                            paste(colnames(book_agg_1sec)[c(-1,-6)],".sell",sep=""))
+      book_agg_1sec$OrderDatetime<-as.POSIXct(book_agg_1sec$OrderDatetime)
+      book_agg$OrderDatetime<-as.POSIXct(sequencia_temporal)
+      
+      
+      ##############################
+      #preenche as colunas com as variáveis que já existiam
+      #############################
+      
+      
+      #Preenche a primeira linha
+      if(nrow(subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[1]&
+                     OrderDatetime>book_agg$OrderDatetime[1]-agregacao*salto))>0){
         
-        #Preenche a primeira linha
-        if(nrow(subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[1]&
-                       OrderDatetime>book_agg$OrderDatetime[1]-agregacao*salto))>0){
+        if(nrow(subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[1] &
+                       OrderDatetime>book_agg$OrderDatetime[1]-agregacao*salto &
+                       type.order=="Buy"))>0){
           
-          if(nrow(subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[1] &
-                    OrderDatetime>book_agg$OrderDatetime[1]-agregacao*salto &
-                    type.order=="Buy"))>0){
-            
-             subcon_buy<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[1] &
+          subcon_buy<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[1] &
                                OrderDatetime>book_agg$OrderDatetime[1]-agregacao*salto &
                                type.order=="Buy")
-             
-             book_agg$n.order.buy[1]<-sum(subcon_buy$n.order)
-             book_agg$n.new.order.buy[1]<-sum(subcon_buy$n.new.order)
-             book_agg$n.update.order.buy[1]<-sum(subcon_buy$n.update.order)
-             book_agg$n.cancelled.order.buy[1]<-sum(subcon_buy$n.cancelled.order)
-             book_agg$avg.order.price.buy[1]<-weighted.mean(subcon_buy$avg.order.price,subcon_buy$n.order)
-             book_agg$max.order.price.buy[1]<-max(subcon_buy$max.order.price)
-             book_agg$min.order.price.buy[1]<-min(subcon_buy$min.order.price)
-          }
           
-          if(nrow(subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[1] &
-                        OrderDatetime>book_agg$OrderDatetime[1]-agregacao*salto &
-                        type.order=="Sell"))>0){
-            
-            subcon_sell<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[1] &
-                                  OrderDatetime>book_agg$OrderDatetime[1]-agregacao*salto &
-                                  type.order=="Sell")
-            
-            book_agg$n.order.sell[1]<--sum(subcon_sell$n.order)
-            book_agg$n.new.order.sell[1]<-sum(subcon_sell$n.new.order)
-            book_agg$n.update.order.sell[1]<-sum(subcon_sell$n.update.order)
-            book_agg$n.cancelled.order.sell[1]<-sum(subcon_sell$n.cancelled.order)
-            book_agg$avg.order.price.sell[1]<-weighted.mean(subcon_sell$avg.order.price,subcon_sell$n.order)
-            book_agg$min.order.price.sell[1]<-min(subcon_sell$min.order.price)
-            book_agg$max.order.price.sell[1]<-max(subcon_sell$max.order.price)
-          }
+          book_agg$n.order.buy[1]<-sum(subcon_buy$n.order)
+          book_agg$n.new.order.buy[1]<-sum(subcon_buy$n.new.order)
+          book_agg$n.update.order.buy[1]<-sum(subcon_buy$n.update.order)
+          book_agg$n.cancelled.order.buy[1]<-sum(subcon_buy$n.cancelled.order)
+          book_agg$avg.order.price.buy[1]<-weighted.mean(subcon_buy$avg.order.price,subcon_buy$n.order)
+          book_agg$max.order.price.buy[1]<-max(subcon_buy$max.order.price)
+          book_agg$min.order.price.buy[1]<-min(subcon_buy$min.order.price)
         }
         
-        
-        for (i in 2:nrow(book_agg)){
-          if(nrow(subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
-                         OrderDatetime>(book_agg$OrderDatetime[i-1]+salto-salto*agregacao)))>0){
-            
-            
-            if (nrow(subcon_buy<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
-                                        OrderDatetime>(book_agg$OrderDatetime[i-1]+salto-salto*agregacao) &
-                                        type.order=="Buy"))>0){
-              
-              subcon_buy<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
-                             OrderDatetime>book_agg$OrderDatetime[i-1]+salto-salto*agregacao &
-                             type.order=="Buy")
-              
-              book_agg$n.order.buy[i]<-sum(subcon_buy$n.order)
-              book_agg$n.new.order.buy[i]<-sum(subcon_buy$n.new.order)
-              book_agg$n.update.order.buy[i]<-sum(subcon_buy$n.update.order)
-              book_agg$n.cancelled.order.buy[i]<-sum(subcon_buy$n.cancelled.order)
-              book_agg$avg.order.price.buy[i]<-weighted.mean(subcon_buy$avg.order.price,subcon_buy$n.order)
-              book_agg$max.order.price.buy[i]<-max(subcon_buy$max.order.price)
-              book_agg$min.order.price.buy[i]<-min(subcon_buy$min.order.price)
-            }
-            
-            if (nrow(subcon_sell<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
-                                         OrderDatetime>(book_agg$OrderDatetime[i-1]+salto-salto*agregacao) &
-                                         type.order=="Sell"))>0){
+        if(nrow(subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[1] &
+                       OrderDatetime>book_agg$OrderDatetime[1]-agregacao*salto &
+                       type.order=="Sell"))>0){
           
+          subcon_sell<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[1] &
+                                OrderDatetime>book_agg$OrderDatetime[1]-agregacao*salto &
+                                type.order=="Sell")
+          
+          book_agg$n.order.sell[1]<--sum(subcon_sell$n.order)
+          book_agg$n.new.order.sell[1]<-sum(subcon_sell$n.new.order)
+          book_agg$n.update.order.sell[1]<-sum(subcon_sell$n.update.order)
+          book_agg$n.cancelled.order.sell[1]<-sum(subcon_sell$n.cancelled.order)
+          book_agg$avg.order.price.sell[1]<-weighted.mean(subcon_sell$avg.order.price,subcon_sell$n.order)
+          book_agg$min.order.price.sell[1]<-min(subcon_sell$min.order.price)
+          book_agg$max.order.price.sell[1]<-max(subcon_sell$max.order.price)
+        }
+      }
+      
+      
+      for (i in 2:nrow(book_agg)){
+        if(nrow(subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
+                       OrderDatetime>(book_agg$OrderDatetime[i-1]+salto-salto*agregacao)))>0){
+          
+          
+          if (nrow(subcon_buy<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
+                                      OrderDatetime>(book_agg$OrderDatetime[i-1]+salto-salto*agregacao) &
+                                      type.order=="Buy"))>0){
+            
+            subcon_buy<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
+                                 OrderDatetime>book_agg$OrderDatetime[i-1]+salto-salto*agregacao &
+                                 type.order=="Buy")
+            
+            book_agg$n.order.buy[i]<-sum(subcon_buy$n.order)
+            book_agg$n.new.order.buy[i]<-sum(subcon_buy$n.new.order)
+            book_agg$n.update.order.buy[i]<-sum(subcon_buy$n.update.order)
+            book_agg$n.cancelled.order.buy[i]<-sum(subcon_buy$n.cancelled.order)
+            book_agg$avg.order.price.buy[i]<-weighted.mean(subcon_buy$avg.order.price,subcon_buy$n.order)
+            book_agg$max.order.price.buy[i]<-max(subcon_buy$max.order.price)
+            book_agg$min.order.price.buy[i]<-min(subcon_buy$min.order.price)
+          }
+          
+          if (nrow(subcon_sell<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
+                                       OrderDatetime>(book_agg$OrderDatetime[i-1]+salto-salto*agregacao) &
+                                       type.order=="Sell"))>0){
+            
             subcon_sell<-subset(book_agg_1sec,OrderDatetime<=book_agg$OrderDatetime[i] &
                                   OrderDatetime>book_agg$OrderDatetime[i-1]+salto-salto*agregacao&
-                                type.order=="Sell")
+                                  type.order=="Sell")
             
             book_agg$n.order.sell[i]<-sum(subcon_sell$n.order)
             book_agg$n.new.order.sell[i]<-sum(subcon_sell$n.new.order)
@@ -401,216 +419,209 @@ for (round_assets in 1:number_assets){
             book_agg$avg.order.price.sell[i]<-weighted.mean(subcon_sell$avg.order.price,subcon_sell$n.order)
             book_agg$max.order.price.sell[i]<-max(subcon_sell$max.order.price)
             book_agg$min.order.price.sell[i]<-min(subcon_sell$min.order.price)
-            }
           }
         }
-        
-        
-        
-        
-        #junta o times and trades e o book
-        
-        para_defasar<-data.frame(cbind(trades_agg,book_agg))
-        para_defasar<-para_defasar[,-which(names(para_defasar) %in% c("OrderDatetime","Tradetime"))]
+      }
       
-        
-        
-        #######################
-        #DEFASA
-        ######################
-        intervalo <- 0.0001 # retornos no intervalo <(-intervalo,+intervalo)> são label 1, menores são 0 e maiores são 2
-        
-        
-        signal <- as.numeric(cut(para_defasar$period.ret,breaks=c(-Inf,-intervalo,intervalo,Inf),labels=c(0,1,2))) # multinomial signal
-        dados<-cbind(signal,para_defasar)
-        # matriz de regressores defasados
-        max.lags <- 4
-
-        
-        defasada<-dados[(max.lags*agregacao+1):(nrow(dados)-agregacao),]
-        defasada<-defasada[,-which(names(defasada) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
-        names<-colnames(defasada)
-        
-        for(i in 1:max.lags){
-          def<-dados[((max.lags-i)*agregacao+1):(nrow(dados)-(i+1)*agregacao),
-                     -which(names(dados) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
-          colnames(def)<-paste(names,"defasagem",i,sep=".")
-          defasada<-cbind(defasada,def)
-        }
-        
-        # Vetor de variável dependente atual
-        direction<-as.matrix(as.numeric(signal))[(max.lags*agregacao+agregacao+1):length(signal),]
-        completa<-cbind(direction,defasada[-(1+nrow(defasada))])
-
-
-  
+      
+      
+      
+      #junta o times and trades e o book
+      
+      para_defasar<-data.frame(cbind(trades_agg,book_agg))
+      para_defasar<-para_defasar[,-which(names(para_defasar) %in% c("OrderDatetime","Tradetime"))]
+      
+      
+      
+      #######################
+      #DEFASA
+      ######################
+      intervalo <- 0.0001 # retornos no intervalo <(-intervalo,+intervalo)> são label 1, menores são 0 e maiores são 2
+      
+      
+      signal <- as.numeric(cut(para_defasar$period.ret,breaks=c(-Inf,-intervalo,intervalo,Inf),labels=c(0,1,2))) # multinomial signal
+      dados<-cbind(signal,para_defasar)
+      # matriz de regressores defasados
+      max.lags <- 4
+      
+      
+      defasada<-dados[(max.lags*agregacao+1):(nrow(dados)-agregacao),]
+      defasada<-defasada[,-which(names(defasada) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
+      names<-colnames(defasada)
+      
+      for(i in 1:max.lags){
+        def<-dados[((max.lags-i)*agregacao+1):(nrow(dados)-(i+1)*agregacao),
+                   -which(names(dados) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
+        colnames(def)<-paste(names,"defasagem",i,sep=".")
+        defasada<-cbind(defasada,def)
+      }
+      
+      # Vetor de variável dependente atual
+      direction<-as.matrix(as.numeric(signal))[(max.lags*agregacao+agregacao+1):length(signal),]
+      completa<-cbind(direction,defasada[-(1+nrow(defasada))])
+      
+      
+      
       #Junta tudo em uma matriz final
       if (exists("final_product")) {
         final_product<-rbind(final_product,completa)
       } else {
         final_product<-completa
       }
-      
     }
-    
-    #retira o symbolo a data da sessão e o horarios
-    treinar<-final_product
-    
-    # Define dados de treino (50%) e validação (50%)
-    train <- 1:round(0.8*nrow(treinar))
-    train.reg <- as.matrix(treinar[train,-1])
-    train.signal <- as.matrix(treinar[train,1])-1
-    valid.reg <- as.matrix(treinar[-train,-1])
-    valid.signal <- as.matrix(treinar[-train,1])-1
-
-    dtrain = xgb.DMatrix(data = train.reg, label = train.signal)
-    
-    numberOfClasses <- length(unique(signal))
-    ##############################
-    
-    
-    xgb_params <- list("objective" = "multi:softprob",
-                       "eval_metric" = "mlogloss",
-                       "num_class" = numberOfClasses)
-    nround    <- 1000 # number of XGBoost rounds
-    
-    cv.nfold  <- 5
-    # Fit cv.nfold * cv.nround XGB models and save OOF predictions
-    cv_model <- xgb.cv(params = xgb_params,
-                       data = dtrain, 
-                       nrounds = nround,
-                       nfold = cv.nfold,
-                       verbose = FALSE,
-                       prediction = TRUE)
-    
-    
-    
-    cv<-(cv_model$evaluation_log$test_mlogloss_mean)
-    min<-which(min(cv)==cv)
-    dp<-cv_model$evaluation_log$test_mlogloss_std[min]
-    best<-which.max(cv < (min+dp))
-    #cross_validation<-cbind(cross_validation,cv_model$evaluation_log$test_mlogloss_mean)
-    #best<-first((min+dp)!=(cv_model$evaluation_log$test_mlogloss_mean))
-    
-    plot(as.ts(cbind(cv_model$evaluation_log$train_mlogloss_mean,cv_model$evaluation_log$test_mlogloss_mean)))
-    
-    #OOF_prediction <- data.frame(cv_model$pred) %>%
-    #  mutate(max_prob = max.col(., ties.method = "last"),
-    #         label = as.numeric(train.signal) + 1)
-    #head(OOF_prediction)
-    
-    
-    # confusion matrix
-    #confusionMatrix(factor(OOF_prediction$label), 
-    #                factor(OOF_prediction$max_prob),
-    #                mode = "everything")
-    
-    
-    ####
-    # Modelo xgboost para classificação multinomial
-    ####
-    
-    xgb_params <- list("objective" = "multi:softprob",
-                       "eval_metric" = "mlogloss",
-                       "num_class" = numberOfClasses)
-    xgModel = xgb.train(params = xgb_params,
-                        data = dtrain, 
-                        nround = best)
-    xgboost.predict <- predict(xgModel, valid.reg)
-    
-    test_prediction <- matrix(xgboost.predict, nrow = numberOfClasses,
-                              ncol=length(xgboost.predict)/numberOfClasses) %>%
-      t() %>%
-      data.frame() %>%
-      mutate(label = as.numeric(valid.signal) + 1,
-             max_prob = max.col(., "last"))
-    
-    c <- confusionMatrix(factor(test_prediction$label),
-                         factor(test_prediction$max_prob),
-                         mode = "everything")
-    #names(c)
-    #c$table
-    #print(c)
-    names <-  colnames(train.reg)
-    importance_matrix = xgb.importance(feature_names = names, model = xgModel)
-    #gp = xgb.plot.importance(importance_matrix)
-    #print(gp)
-    
-    resumo[asset,,agregacao]<-c(c$table[1,1]/sum(c$table[1,]),c$table[1,1]/sum(c$table[1,3]),
-                                c$table[3,3]/sum(c$table[3,]),c$table[3,3]/sum(c$table[3,1]),
-                                sum(diag(c$table[1,1]))/sum(c$table[1,]),c$table[1,1]/sum(c$table[1,3]))
-    
-    byClass[,round_assets,agregacao]<-t(c$byClass)
-    overall[,round_assets,agregacao]<-t(c$overall)
-    importance_loop<- importance_matrix$Importance[match(row.names(data.frame(importance[,round_assets,agregacao])), importance_matrix$Feature)]
-    importance_loop<-replace(importance_loop,is.na(importance_loop),0)
-    importance[,round_assets,agregacao]<-importance_loop
-    
-    #train.all<-data.frame(treinar[train,])
-    #valid.all<-data.frame(treinar[-train,])
-  
-    #rownames(train.all)<-1:nrow(train.all)
-    #rownames(valid.all)<-1:nrow(valid.all)
-    #regressores<-colnames(train.all)[-1]
-    #train.logit<-mlogit::mlogit.data(data=train.all,choice="direction",shape="wide")
-    #valid.logit<-mlogit::mlogit.data(data=valid.all,choice="direction",shape="wide")
-    #f1 <- mFormula(direction ~ 1 | signal + n.trades + last.price + weighted.price + period.ret + period.price.volat + sum.qtd + sum.vol + 
-    #                 n.buys + n.sells + time_opening + vol.buys + vol.sells + weighted.price.buys + weighted.price.sells + MeanReturn +
-    #                 VarianceReturn + SkewnessReturn + KurtosisReturn + n.order.buy +
-      #               avg.order.price.buy + max.order.price.buy + min.order.price.buy + n.new.order.buy + n.update.order.buy + 
-    #                 n.cancelled.order.buy + n.order.sell + avg.order.price.sell + max.order.price.sell + min.order.price.sell + 
-    #                 n.new.order.sell + n.update.order.sell + n.cancelled.order.sell) # + signal.defasagem.1 + n.trades.defasagem.1 + 
-    #last.price.defasagem.1 + weighted.price.defasagem.1 + period.ret.defasagem.1 + period.price.volat.defasagem.1 + 
-    #sum.qtd.defasagem.1 + sum.vol.defasagem.1 + n.buys.defasagem.1 + n.sells.defasagem.1 + time_opening.defasagem.1 + 
-    #vol.buys.defasagem.1 + vol.sells.defasagem.1 + weighted.price.buys.defasagem.1 + weighted.price.sells.defasagem.1 + 
-    #MeanReturn.defasagem.1 + VarianceReturn.defasagem.1 +SkewnessReturn.defasagem.1 + KurtosisReturn.defasagem.1 + 
-    #agem.1 + avg.order.price.buy.defasagem.1 + max.order.price.buy.defasagem.1 + 
-    #min.order.price.buy.defasagem.1 + n.new.order.buy.defasagem.1 + n.update.order.buy.defasagem.1 + 
-    #n.cancelled.order.buy.defasagem.1 + n.order.sell.defasagem.1 + avg.order.price.sell.defasagem.1 + 
-    #max.order.price.sell.defasagem.1 + min.order.price.sell.defasagem.1 + n.new.order.sell.defasagem.1 + 
-    #n.update.order.sell.defasagem.1 + n.cancelled.order.sell.defasagem.1 + signal.defasagem.2 + n.trades.defasagem.2 + 
-    #last.price.defasagem.2 + weighted.price.defasagem.2 + period.ret.defasagem.2 + period.price.volat.defasagem.2 + 
-    #sum.qtd.defasagem.2 + sum.vol.defasagem.2 + n.buys.defasagem.2 + n.sells.defasagem.2 + time_opening.defasagem.2 + 
-    #vol.buys.defasagem.2 + vol.sells.defasagem.2 + weighted.price.buys.defasagem.2 + weighted.price.sells.defasagem.2 + MeanReturn.defasagem.2 +
-    #VarianceReturn.defasagem.2 + SkewnessReturn.defasagem.2 + KurtosisReturn.defasagem.2 + n.order.buy.defasagem.2 + 
-    #avg.order.price.buy.defasagem.2 + max.order.price.buy.defasagem.2 + min.order.price.buy.defasagem.2 + n.new.order.buy.defasagem.2 + 
-    #n.update.order.buy.defasagem.2 + n.cancelled.order.buy.defasagem.2 + n.order.sell.defasagem.2 + avg.order.price.sell.defasagem.2 +
-    #max.order.price.sell.defasagem.2 + min.order.price.sell.defasagem.2 + n.new.order.sell.defasagem.2 + n.update.order.sell.defasagem.2 + 
-    #n.cancelled.order.sell.defasagem.2 + signal.defasagem.3 + n.trades.defasagem.3 + last.price.defasagem.3 + weighted.price.defasagem.3 + 
-    #period.ret.defasagem.3 + period.price.volat.defasagem.3 + sum.qtd.defasagem.3 + sum.vol.defasagem.3 + n.buys.defasagem.3 + 
-    #n.sells.defasagem.3 + time_opening.defasagem.3+ vol.buys.defasagem.3 + vol.sells.defasagem.3 + weighted.price.buys.defasagem.3 + weighted.price.sells.defasagem.3 + 
-    #MeanReturn.defasagem.3 + VarianceReturn.defasagem.3 + SkewnessReturn.defasagem.3 + KurtosisReturn.defasagem.3 + 
-    #n.order.buy.defasagem.3 + avg.order.price.buy.defasagem.3 + max.order.price.buy.defasagem.3 + min.order.price.buy.defasagem.3 + 
-    #n.new.order.buy.defasagem.3 + n.update.order.buy.defasagem.3 + n.cancelled.order.buy.defasagem.3 + n.order.sell.defasagem.3 + 
-    #avg.order.price.sell.defasagem.3 + max.order.price.sell.defasagem.3 + min.order.price.sell.defasagem.3 + n.new.order.sell.defasagem.3 + 
-    #n.update.order.sell.defasagem.3 + n.cancelled.order.sell.defasagem.3 + signal.defasagem.4 + n.trades.defasagem.4 + last.price.defasagem.4 +
-    #weighted.price.defasagem.4 + period.ret.defasagem.4 + period.price.volat.defasagem.4 + sum.qtd.defasagem.4 + sum.vol.defasagem.4)
-    
-    
-    
-    
-    #head(model.matrix(f1, train.logit))
-    #head(model.frame.default(f1, train.logit, lhs = NULL, rhs = NULL))
-    #logit_estimado<-mlogit(formula=f1,data=train.logit,ftol=1e-30,gtol=1e-30)
-    
-    rm(final_product)
   }
-  #Fazer estimação
-}
+    if (file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//byClass//byClass %s.csv",agregacao))){
+      rm(final_product)
+    } else {
+      write.csv(final_product,sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//bases//base %s.csv",agregacao))
+      #retira o symbolo a data da sessão e o horarios
+      treinar<-final_product
+      
+      # Define dados de treino (50%) e validação (50%)
+      train <- 1:round(0.8*nrow(treinar))
+      train.reg <- as.matrix(treinar[train,-1])
+      train.signal <- as.matrix(treinar[train,1])-1
+      valid.reg <- as.matrix(treinar[-train,-1])
+      valid.signal <- as.matrix(treinar[-train,1])-1
+      
+      dtrain = xgb.DMatrix(data = train.reg, label = train.signal)
+      
+      numberOfClasses <- length(unique(final_product$signal))
+      ##############################
+      
+      
+      xgb_params <- list("objective" = "multi:softprob",
+                         "eval_metric" = "mlogloss",
+                         "num_class" = numberOfClasses)
+      nround    <-200 # number of XGBoost rounds
+      
+      cv.nfold  <- 5
+      #Fit cv.nfold * cv.nround XGB models and save OOF predictions
+      cv_model <- xgb.cv(params = xgb_params,
+                         data = dtrain, 
+                         nrounds = nround,
+                         nfold = cv.nfold,
+                         verbose = FALSE,
+                         prediction = TRUE)
+      #
+      
+      
+      cv<-(cv_model$evaluation_log$test_mlogloss_mean)
+      min<-which(min(cv)==cv)
+      dp<-cv_model$evaluation_log$test_mlogloss_std[min]
+      best<-which.max(cv < (min+dp))
+      cross_validation<-cbind(cross_validation,cv_model$evaluation_log$test_mlogloss_mean)
+      best<-first((min+dp)!=(cv_model$evaluation_log$test_mlogloss_mean))
+      
+      #plot(as.ts(cbind(cv_model$evaluation_log$train_mlogloss_mean,cv_model$evaluation_log$test_mlogloss_mean)))
+      
+      OOF_prediction <- data.frame(cv_model$pred) %>%
+        mutate(max_prob = max.col(., ties.method = "last"),
+               label = as.numeric(train.signal) + 1)
+      #head(OOF_prediction)
+      
+      
+      # confusion matrix
+      confusionMatrix(factor(OOF_prediction$label), 
+                      factor(OOF_prediction$max_prob),
+                      mode = "everything")
+      
+      
+      ####
+      # Modelo xgboost para classificação multinomial
+      ####
+      
+      xgb_params <- list("objective" = "multi:softprob",
+                         "eval_metric" = "mlogloss",
+                         "num_class" = numberOfClasses)
+      xgModel = xgb.train(params = xgb_params,
+                          data = dtrain, 
+                          nround = best)
+      xgboost.predict <- predict(xgModel, valid.reg)
+      
+      test_prediction <- matrix(xgboost.predict, nrow = numberOfClasses,
+                                ncol=length(xgboost.predict)/numberOfClasses) %>%
+        t() %>%
+        data.frame() %>%
+        mutate(label = as.numeric(valid.signal) + 1,
+               max_prob = max.col(., "last"))
+      
+      c <- confusionMatrix(factor(test_prediction$label),
+                           factor(test_prediction$max_prob),
+                           mode = "everything")
+      names(c)
+      c$table
+      #print(c)
+      names <-  colnames(train.reg)
+      importance_matrix = xgb.importance(feature_names = names, model = xgModel)
+      gp = xgb.plot.importance(importance_matrix)
+      #print(gp)
+      
+      #resumo[asset,,agregacao]<-c(c$table[1,1]/sum(c$table[1,]),c$table[1,1]/sum(c$table[1,3]),
+      #                             c$table[3,3]/sum(c$table[3,]),c$table[3,3]/sum(c$table[3,1]),
+      #                           sum(diag(c$table[1,1]))/sum(c$table[1,]),c$table[1,1]/sum(c$table[1,3]))
+      
+      byClass[,agregacao]<-t(c$byClass)
+      overall[,agregacao]<-t(c$overall)
+      importance_loop<- importance_matrix$Importance[match(row.names(data.frame(importance[,agregacao])), importance_matrix$Feature)]
+      importance_loop<-replace(importance_loop,is.na(importance_loop),0)
+      importance[,agregacao]<-importance_loop
+      
+      write.csv(byClass[,agregacao],sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//byClass//byClass %s.csv",agregacao))
+      write.csv(overall[,agregacao],sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//overall//overall %s.csv",agregacao))
+      write.csv(importance[,agregacao],sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//importance//importance %s.csv",agregacao))
+      
+      
+      #train.all<-data.frame(treinar[train,])
+      #valid.all<-data.frame(treinar[-train,])
+      
+      #rownames(train.all)<-1:nrow(train.all)
+      #rownames(valid.all)<-1:nrow(valid.all)
+      #regressores<-colnames(train.all)[-1]
+      #train.logit<-mlogit::mlogit.data(data=train.all,choice="direction",shape="wide")
+      #valid.logit<-mlogit::mlogit.data(data=valid.all,choice="direction",shape="wide")
+      #f1 <- mFormula(direction ~ 1 | signal + n.trades + last.price + weighted.price + period.ret + period.price.volat + sum.qtd + sum.vol + 
+      #                 n.buys + n.sells + time_opening + vol.buys + vol.sells + weighted.price.buys + weighted.price.sells + MeanReturn +
+      #                 VarianceReturn + SkewnessReturn + KurtosisReturn + n.order.buy +
+      #               avg.order.price.buy + max.order.price.buy + min.order.price.buy + n.new.order.buy + n.update.order.buy + 
+      #                 n.cancelled.order.buy + n.order.sell + avg.order.price.sell + max.order.price.sell + min.order.price.sell + 
+      #                 n.new.order.sell + n.update.order.sell + n.cancelled.order.sell) # + signal.defasagem.1 + n.trades.defasagem.1 + 
+      #last.price.defasagem.1 + weighted.price.defasagem.1 + period.ret.defasagem.1 + period.price.volat.defasagem.1 + 
+      #sum.qtd.defasagem.1 + sum.vol.defasagem.1 + n.buys.defasagem.1 + n.sells.defasagem.1 + time_opening.defasagem.1 + 
+      #vol.buys.defasagem.1 + vol.sells.defasagem.1 + weighted.price.buys.defasagem.1 + weighted.price.sells.defasagem.1 + 
+      #MeanReturn.defasagem.1 + VarianceReturn.defasagem.1 +SkewnessReturn.defasagem.1 + KurtosisReturn.defasagem.1 + 
+      #agem.1 + avg.order.price.buy.defasagem.1 + max.order.price.buy.defasagem.1 + 
+      #min.order.price.buy.defasagem.1 + n.new.order.buy.defasagem.1 + n.update.order.buy.defasagem.1 + 
+      #n.cancelled.order.buy.defasagem.1 + n.order.sell.defasagem.1 + avg.order.price.sell.defasagem.1 + 
+      #max.order.price.sell.defasagem.1 + min.order.price.sell.defasagem.1 + n.new.order.sell.defasagem.1 + 
+      #n.update.order.sell.defasagem.1 + n.cancelled.order.sell.defasagem.1 + signal.defasagem.2 + n.trades.defasagem.2 + 
+      #last.price.defasagem.2 + weighted.price.defasagem.2 + period.ret.defasagem.2 + period.price.volat.defasagem.2 + 
+      #sum.qtd.defasagem.2 + sum.vol.defasagem.2 + n.buys.defasagem.2 + n.sells.defasagem.2 + time_opening.defasagem.2 + 
+      #vol.buys.defasagem.2 + vol.sells.defasagem.2 + weighted.price.buys.defasagem.2 + weighted.price.sells.defasagem.2 + MeanReturn.defasagem.2 +
+      #VarianceReturn.defasagem.2 + SkewnessReturn.defasagem.2 + KurtosisReturn.defasagem.2 + n.order.buy.defasagem.2 + 
+      #avg.order.price.buy.defasagem.2 + max.order.price.buy.defasagem.2 + min.order.price.buy.defasagem.2 + n.new.order.buy.defasagem.2 + 
+      #n.update.order.buy.defasagem.2 + n.cancelled.order.buy.defasagem.2 + n.order.sell.defasagem.2 + avg.order.price.sell.defasagem.2 +
+      #max.order.price.sell.defasagem.2 + min.order.price.sell.defasagem.2 + n.new.order.sell.defasagem.2 + n.update.order.sell.defasagem.2 + 
+      #n.cancelled.order.sell.defasagem.2 + signal.defasagem.3 + n.trades.defasagem.3 + last.price.defasagem.3 + weighted.price.defasagem.3 + 
+      #period.ret.defasagem.3 + period.price.volat.defasagem.3 + sum.qtd.defasagem.3 + sum.vol.defasagem.3 + n.buys.defasagem.3 + 
+      #n.sells.defasagem.3 + time_opening.defasagem.3+ vol.buys.defasagem.3 + vol.sells.defasagem.3 + weighted.price.buys.defasagem.3 + weighted.price.sells.defasagem.3 + 
+      #MeanReturn.defasagem.3 + VarianceReturn.defasagem.3 + SkewnessReturn.defasagem.3 + KurtosisReturn.defasagem.3 + 
+      #n.order.buy.defasagem.3 + avg.order.price.buy.defasagem.3 + max.order.price.buy.defasagem.3 + min.order.price.buy.defasagem.3 + 
+      #n.new.order.buy.defasagem.3 + n.update.order.buy.defasagem.3 + n.cancelled.order.buy.defasagem.3 + n.order.sell.defasagem.3 + 
+      #avg.order.price.sell.defasagem.3 + max.order.price.sell.defasagem.3 + min.order.price.sell.defasagem.3 + n.new.order.sell.defasagem.3 + 
+      #n.update.order.sell.defasagem.3 + n.cancelled.order.sell.defasagem.3 + signal.defasagem.4 + n.trades.defasagem.4 + last.price.defasagem.4 +
+      #weighted.price.defasagem.4 + period.ret.defasagem.4 + period.price.volat.defasagem.4 + sum.qtd.defasagem.4 + sum.vol.defasagem.4)
+      
+      
+      
+      
+      #head(model.matrix(f1, train.logit))
+      #head(model.frame.default(f1, train.logit, lhs = NULL, rhs = NULL))
+      #logit_estimado<-mlogit(formula=f1,data=train.logit,ftol=1e-30,gtol=1e-30)
+      
+      rm(final_product)
+    }
+  }
+}  #Fazer estimação
 
 
-par(mfrow=c(3,2))
-plot.ts(resumo["Sensitivity buy"])
-plot.ts(resumo["Sensitivity sell"])
-plot.ts(resumo["Specificity buy"])
-plot.ts(resumo["Specificity sell"])
-plot.ts(resumo["Precision buy"])
-plot.ts(resumo["Precision sell"])
-
-c$overall
-c$byClass
-
-importance.matrix
-
-cross_validation<-log(cv_model$evaluation_log$test_mlogloss_mean)
-write.csv(cross_validation,"C://Users//rwagn//Documents//R//Econometria 2//validacao")
