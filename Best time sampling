@@ -89,7 +89,7 @@ cross_validation<-1:200
 asset<-assets[1]
 #faz pra uma dada agregação
 #agregacoes<-1:agregacao_maxima
-agregacoes<-31:40
+agregacoes<-44:46
 for(agregacao in agregacoes){
   if(file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//bases//base %s.csv",agregacao))){
     final_product<-read.csv(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//bases//base %s.csv",agregacao))
@@ -326,6 +326,7 @@ for(agregacao in agregacoes){
       if(colnames(book_agg_1sec)[1]=="X"){
         book_agg_1sec<-book_agg_1sec[,-1]
       }
+      
       book_agg_1sec<-book_agg_1sec[,c(-1,-2)]
       
       ###CONTROI O VETOR QUE AGREGARÁ OS DADOS DO BOOK
@@ -380,6 +381,7 @@ for(agregacao in agregacoes){
           book_agg$max.order.price.sell[1]<-max(subcon_sell$max.order.price)
         }
       }
+      
       
       
       for (i in 2:nrow(book_agg)){
@@ -449,16 +451,16 @@ for(agregacao in agregacoes){
       defasada<-defasada[,-which(names(defasada) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
       names<-colnames(defasada)
       
-      for(i in 1:max.lags){
-        def<-dados[((max.lags-i)*agregacao+1):(nrow(dados)-(i+1)*agregacao),
+      for(b in 1:max.lags){
+        def<-dados[((max.lags-b)*agregacao+1):(nrow(dados)-(b+1)*agregacao),
                    -which(names(dados) %in% c("InstrumentSymbol","SessionDate","TradeDateTime"))]
-        colnames(def)<-paste(names,"defasagem",i,sep=".")
+        colnames(def)<-paste(names,"defasagem",b,sep=".")
         defasada<-cbind(defasada,def)
       }
       
       # Vetor de variável dependente atual
       direction<-as.matrix(as.numeric(signal))[(max.lags*agregacao+agregacao+1):length(signal),]
-      completa<-cbind(direction,defasada[-(1+nrow(defasada))])
+      completa<-cbind(direction,defasada[-(1+nrow(defasada)),])
       
       
       
@@ -470,158 +472,158 @@ for(agregacao in agregacoes){
       }
     }
   }
-    if (file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//byClass//byClass %s.csv",agregacao))){
-      rm(final_product)
-    } else {
-      write.csv(final_product,sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//bases//base %s.csv",agregacao))
-      #retira o symbolo a data da sessão e o horarios
-      treinar<-final_product
-      
-      # Define dados de treino (50%) e validação (50%)
-      train <- 1:round(0.8*nrow(treinar))
-      train.reg <- as.matrix(treinar[train,-1])
-      train.signal <- as.matrix(treinar[train,1])-1
-      valid.reg <- as.matrix(treinar[-train,-1])
-      valid.signal <- as.matrix(treinar[-train,1])-1
-      
-      dtrain = xgb.DMatrix(data = train.reg, label = train.signal)
-      
-      numberOfClasses <- length(unique(final_product$signal))
-      ##############################
-      
-      
-      xgb_params <- list("objective" = "multi:softprob",
-                         "eval_metric" = "mlogloss",
-                         "num_class" = numberOfClasses)
-      nround    <-200 # number of XGBoost rounds
-      
-      cv.nfold  <- 5
-      #Fit cv.nfold * cv.nround XGB models and save OOF predictions
-      cv_model <- xgb.cv(params = xgb_params,
-                         data = dtrain, 
-                         nrounds = nround,
-                         nfold = cv.nfold,
-                         verbose = FALSE,
-                         prediction = TRUE)
-      #
-      
-      
-      cv<-(cv_model$evaluation_log$test_mlogloss_mean)
-      min<-which(min(cv)==cv)
-      dp<-cv_model$evaluation_log$test_mlogloss_std[min]
-      best<-which.max(cv < (min+dp))
-      cross_validation<-cbind(cross_validation,cv_model$evaluation_log$test_mlogloss_mean)
-      best<-first((min+dp)!=(cv_model$evaluation_log$test_mlogloss_mean))
-      
-      #plot(as.ts(cbind(cv_model$evaluation_log$train_mlogloss_mean,cv_model$evaluation_log$test_mlogloss_mean)))
-      
-      OOF_prediction <- data.frame(cv_model$pred) %>%
-        mutate(max_prob = max.col(., ties.method = "last"),
-               label = as.numeric(train.signal) + 1)
-      #head(OOF_prediction)
-      
-      
-      # confusion matrix
-      confusionMatrix(factor(OOF_prediction$label), 
-                      factor(OOF_prediction$max_prob),
-                      mode = "everything")
-      
-      
-      ####
-      # Modelo xgboost para classificação multinomial
-      ####
-      
-      xgb_params <- list("objective" = "multi:softprob",
-                         "eval_metric" = "mlogloss",
-                         "num_class" = numberOfClasses)
-      xgModel = xgb.train(params = xgb_params,
-                          data = dtrain, 
-                          nround = best)
-      xgboost.predict <- predict(xgModel, valid.reg)
-      
-      test_prediction <- matrix(xgboost.predict, nrow = numberOfClasses,
-                                ncol=length(xgboost.predict)/numberOfClasses) %>%
-        t() %>%
-        data.frame() %>%
-        mutate(label = as.numeric(valid.signal) + 1,
-               max_prob = max.col(., "last"))
-      
-      c <- confusionMatrix(factor(test_prediction$label),
-                           factor(test_prediction$max_prob),
-                           mode = "everything")
-      names(c)
-      c$table
-      #print(c)
-      names <-  colnames(train.reg)
-      importance_matrix = xgb.importance(feature_names = names, model = xgModel)
-      gp = xgb.plot.importance(importance_matrix)
-      #print(gp)
-      
-      #resumo[asset,,agregacao]<-c(c$table[1,1]/sum(c$table[1,]),c$table[1,1]/sum(c$table[1,3]),
-      #                             c$table[3,3]/sum(c$table[3,]),c$table[3,3]/sum(c$table[3,1]),
-      #                           sum(diag(c$table[1,1]))/sum(c$table[1,]),c$table[1,1]/sum(c$table[1,3]))
-      
-      byClass[,agregacao]<-t(c$byClass)
-      overall[,agregacao]<-t(c$overall)
-      importance_loop<- importance_matrix$Importance[match(row.names(data.frame(importance[,agregacao])), importance_matrix$Feature)]
-      importance_loop<-replace(importance_loop,is.na(importance_loop),0)
-      importance[,agregacao]<-importance_loop
-      
-      write.csv(byClass[,agregacao],sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//byClass//byClass %s.csv",agregacao))
-      write.csv(overall[,agregacao],sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//overall//overall %s.csv",agregacao))
-      write.csv(importance[,agregacao],sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//importance//importance %s.csv",agregacao))
-      
-      
-      #train.all<-data.frame(treinar[train,])
-      #valid.all<-data.frame(treinar[-train,])
-      
-      #rownames(train.all)<-1:nrow(train.all)
-      #rownames(valid.all)<-1:nrow(valid.all)
-      #regressores<-colnames(train.all)[-1]
-      #train.logit<-mlogit::mlogit.data(data=train.all,choice="direction",shape="wide")
-      #valid.logit<-mlogit::mlogit.data(data=valid.all,choice="direction",shape="wide")
-      #f1 <- mFormula(direction ~ 1 | signal + n.trades + last.price + weighted.price + period.ret + period.price.volat + sum.qtd + sum.vol + 
-      #                 n.buys + n.sells + time_opening + vol.buys + vol.sells + weighted.price.buys + weighted.price.sells + MeanReturn +
-      #                 VarianceReturn + SkewnessReturn + KurtosisReturn + n.order.buy +
-      #               avg.order.price.buy + max.order.price.buy + min.order.price.buy + n.new.order.buy + n.update.order.buy + 
-      #                 n.cancelled.order.buy + n.order.sell + avg.order.price.sell + max.order.price.sell + min.order.price.sell + 
-      #                 n.new.order.sell + n.update.order.sell + n.cancelled.order.sell) # + signal.defasagem.1 + n.trades.defasagem.1 + 
-      #last.price.defasagem.1 + weighted.price.defasagem.1 + period.ret.defasagem.1 + period.price.volat.defasagem.1 + 
-      #sum.qtd.defasagem.1 + sum.vol.defasagem.1 + n.buys.defasagem.1 + n.sells.defasagem.1 + time_opening.defasagem.1 + 
-      #vol.buys.defasagem.1 + vol.sells.defasagem.1 + weighted.price.buys.defasagem.1 + weighted.price.sells.defasagem.1 + 
-      #MeanReturn.defasagem.1 + VarianceReturn.defasagem.1 +SkewnessReturn.defasagem.1 + KurtosisReturn.defasagem.1 + 
-      #agem.1 + avg.order.price.buy.defasagem.1 + max.order.price.buy.defasagem.1 + 
-      #min.order.price.buy.defasagem.1 + n.new.order.buy.defasagem.1 + n.update.order.buy.defasagem.1 + 
-      #n.cancelled.order.buy.defasagem.1 + n.order.sell.defasagem.1 + avg.order.price.sell.defasagem.1 + 
-      #max.order.price.sell.defasagem.1 + min.order.price.sell.defasagem.1 + n.new.order.sell.defasagem.1 + 
-      #n.update.order.sell.defasagem.1 + n.cancelled.order.sell.defasagem.1 + signal.defasagem.2 + n.trades.defasagem.2 + 
-      #last.price.defasagem.2 + weighted.price.defasagem.2 + period.ret.defasagem.2 + period.price.volat.defasagem.2 + 
-      #sum.qtd.defasagem.2 + sum.vol.defasagem.2 + n.buys.defasagem.2 + n.sells.defasagem.2 + time_opening.defasagem.2 + 
-      #vol.buys.defasagem.2 + vol.sells.defasagem.2 + weighted.price.buys.defasagem.2 + weighted.price.sells.defasagem.2 + MeanReturn.defasagem.2 +
-      #VarianceReturn.defasagem.2 + SkewnessReturn.defasagem.2 + KurtosisReturn.defasagem.2 + n.order.buy.defasagem.2 + 
-      #avg.order.price.buy.defasagem.2 + max.order.price.buy.defasagem.2 + min.order.price.buy.defasagem.2 + n.new.order.buy.defasagem.2 + 
-      #n.update.order.buy.defasagem.2 + n.cancelled.order.buy.defasagem.2 + n.order.sell.defasagem.2 + avg.order.price.sell.defasagem.2 +
-      #max.order.price.sell.defasagem.2 + min.order.price.sell.defasagem.2 + n.new.order.sell.defasagem.2 + n.update.order.sell.defasagem.2 + 
-      #n.cancelled.order.sell.defasagem.2 + signal.defasagem.3 + n.trades.defasagem.3 + last.price.defasagem.3 + weighted.price.defasagem.3 + 
-      #period.ret.defasagem.3 + period.price.volat.defasagem.3 + sum.qtd.defasagem.3 + sum.vol.defasagem.3 + n.buys.defasagem.3 + 
-      #n.sells.defasagem.3 + time_opening.defasagem.3+ vol.buys.defasagem.3 + vol.sells.defasagem.3 + weighted.price.buys.defasagem.3 + weighted.price.sells.defasagem.3 + 
-      #MeanReturn.defasagem.3 + VarianceReturn.defasagem.3 + SkewnessReturn.defasagem.3 + KurtosisReturn.defasagem.3 + 
-      #n.order.buy.defasagem.3 + avg.order.price.buy.defasagem.3 + max.order.price.buy.defasagem.3 + min.order.price.buy.defasagem.3 + 
-      #n.new.order.buy.defasagem.3 + n.update.order.buy.defasagem.3 + n.cancelled.order.buy.defasagem.3 + n.order.sell.defasagem.3 + 
-      #avg.order.price.sell.defasagem.3 + max.order.price.sell.defasagem.3 + min.order.price.sell.defasagem.3 + n.new.order.sell.defasagem.3 + 
-      #n.update.order.sell.defasagem.3 + n.cancelled.order.sell.defasagem.3 + signal.defasagem.4 + n.trades.defasagem.4 + last.price.defasagem.4 +
-      #weighted.price.defasagem.4 + period.ret.defasagem.4 + period.price.volat.defasagem.4 + sum.qtd.defasagem.4 + sum.vol.defasagem.4)
-      
-      
-      
-      
-      #head(model.matrix(f1, train.logit))
-      #head(model.frame.default(f1, train.logit, lhs = NULL, rhs = NULL))
-      #logit_estimado<-mlogit(formula=f1,data=train.logit,ftol=1e-30,gtol=1e-30)
-      
-      rm(final_product)
-    }
+  if (file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//byClass//byClass %s.csv",agregacao))){
+    rm(final_product)
+  } else {
+    write.csv(final_product,sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//bases//base %s.csv",agregacao))
+    #retira o symbolo a data da sessão e o horarios
+    treinar<-final_product
+    
+    # Define dados de treino (50%) e validação (50%)
+    train <- 1:round(0.8*nrow(treinar))
+    train.reg <- as.matrix(treinar[train,-1])
+    train.signal <- as.matrix(treinar[train,1])-1
+    valid.reg <- as.matrix(treinar[-train,-1])
+    valid.signal <- as.matrix(treinar[-train,1])-1
+    
+    dtrain = xgb.DMatrix(data = train.reg, label = train.signal)
+    
+    numberOfClasses <- length(unique(final_product$signal))
+    ##############################
+    
+    
+    xgb_params <- list("objective" = "multi:softprob",
+                       "eval_metric" = "mlogloss",
+                       "num_class" = numberOfClasses)
+    nround    <-200 # number of XGBoost rounds
+    
+    cv.nfold  <- 5
+    #Fit cv.nfold * cv.nround XGB models and save OOF predictions
+    cv_model <- xgb.cv(params = xgb_params,
+                       data = dtrain, 
+                       nrounds = nround,
+                       nfold = cv.nfold,
+                       verbose = FALSE,
+                       prediction = TRUE)
+    #
+    
+    
+    cv<-(cv_model$evaluation_log$test_mlogloss_mean)
+    min<-which(min(cv)==cv)
+    dp<-cv_model$evaluation_log$test_mlogloss_std[min]
+    best<-which.max(cv < (min+dp))
+    cross_validation<-cbind(cross_validation,cv_model$evaluation_log$test_mlogloss_mean)
+    best<-first((min+dp)!=(cv_model$evaluation_log$test_mlogloss_mean))
+    
+    #plot(as.ts(cbind(cv_model$evaluation_log$train_mlogloss_mean,cv_model$evaluation_log$test_mlogloss_mean)))
+    
+    OOF_prediction <- data.frame(cv_model$pred) %>%
+      mutate(max_prob = max.col(., ties.method = "last"),
+             label = as.numeric(train.signal) + 1)
+    #head(OOF_prediction)
+    
+    
+    # confusion matrix
+    confusionMatrix(factor(OOF_prediction$label), 
+                    factor(OOF_prediction$max_prob),
+                    mode = "everything")
+    
+    
+    ####
+    # Modelo xgboost para classificação multinomial
+    ####
+    
+    xgb_params <- list("objective" = "multi:softprob",
+                       "eval_metric" = "mlogloss",
+                       "num_class" = numberOfClasses)
+    xgModel = xgb.train(params = xgb_params,
+                        data = dtrain, 
+                        nround = best)
+    xgboost.predict <- predict(xgModel, valid.reg)
+    
+    test_prediction <- matrix(xgboost.predict, nrow = numberOfClasses,
+                              ncol=length(xgboost.predict)/numberOfClasses) %>%
+      t() %>%
+      data.frame() %>%
+      mutate(label = as.numeric(valid.signal) + 1,
+             max_prob = max.col(., "last"))
+    
+    c <- confusionMatrix(factor(test_prediction$label),
+                         factor(test_prediction$max_prob),
+                         mode = "everything")
+    names(c)
+    c$table
+    #print(c)
+    names <-  colnames(train.reg)
+    importance_matrix = xgb.importance(feature_names = names, model = xgModel)
+    gp = xgb.plot.importance(importance_matrix)
+    #print(gp)
+    
+    #resumo[asset,,agregacao]<-c(c$table[1,1]/sum(c$table[1,]),c$table[1,1]/sum(c$table[1,3]),
+    #                             c$table[3,3]/sum(c$table[3,]),c$table[3,3]/sum(c$table[3,1]),
+    #                           sum(diag(c$table[1,1]))/sum(c$table[1,]),c$table[1,1]/sum(c$table[1,3]))
+    
+    byClass[,agregacao]<-t(c$byClass)
+    overall[,agregacao]<-t(c$overall)
+    importance_loop<- importance_matrix$Importance[match(row.names(data.frame(importance[,agregacao])), importance_matrix$Feature)]
+    importance_loop<-replace(importance_loop,is.na(importance_loop),0)
+    importance[,agregacao]<-importance_loop
+    
+    write.csv(byClass[,agregacao],sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//byClass//byClass %s.csv",agregacao))
+    write.csv(overall[,agregacao],sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//overall//overall %s.csv",agregacao))
+    write.csv(importance[,agregacao],sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//importance//importance %s.csv",agregacao))
+    
+    
+    #train.all<-data.frame(treinar[train,])
+    #valid.all<-data.frame(treinar[-train,])
+    
+    #rownames(train.all)<-1:nrow(train.all)
+    #rownames(valid.all)<-1:nrow(valid.all)
+    #regressores<-colnames(train.all)[-1]
+    #train.logit<-mlogit::mlogit.data(data=train.all,choice="direction",shape="wide")
+    #valid.logit<-mlogit::mlogit.data(data=valid.all,choice="direction",shape="wide")
+    #f1 <- mFormula(direction ~ 1 | signal + n.trades + last.price + weighted.price + period.ret + period.price.volat + sum.qtd + sum.vol + 
+    #                 n.buys + n.sells + time_opening + vol.buys + vol.sells + weighted.price.buys + weighted.price.sells + MeanReturn +
+    #                 VarianceReturn + SkewnessReturn + KurtosisReturn + n.order.buy +
+    #               avg.order.price.buy + max.order.price.buy + min.order.price.buy + n.new.order.buy + n.update.order.buy + 
+    #                 n.cancelled.order.buy + n.order.sell + avg.order.price.sell + max.order.price.sell + min.order.price.sell + 
+    #                 n.new.order.sell + n.update.order.sell + n.cancelled.order.sell) # + signal.defasagem.1 + n.trades.defasagem.1 + 
+    #last.price.defasagem.1 + weighted.price.defasagem.1 + period.ret.defasagem.1 + period.price.volat.defasagem.1 + 
+    #sum.qtd.defasagem.1 + sum.vol.defasagem.1 + n.buys.defasagem.1 + n.sells.defasagem.1 + time_opening.defasagem.1 + 
+    #vol.buys.defasagem.1 + vol.sells.defasagem.1 + weighted.price.buys.defasagem.1 + weighted.price.sells.defasagem.1 + 
+    #MeanReturn.defasagem.1 + VarianceReturn.defasagem.1 +SkewnessReturn.defasagem.1 + KurtosisReturn.defasagem.1 + 
+    #agem.1 + avg.order.price.buy.defasagem.1 + max.order.price.buy.defasagem.1 + 
+    #min.order.price.buy.defasagem.1 + n.new.order.buy.defasagem.1 + n.update.order.buy.defasagem.1 + 
+    #n.cancelled.order.buy.defasagem.1 + n.order.sell.defasagem.1 + avg.order.price.sell.defasagem.1 + 
+    #max.order.price.sell.defasagem.1 + min.order.price.sell.defasagem.1 + n.new.order.sell.defasagem.1 + 
+    #n.update.order.sell.defasagem.1 + n.cancelled.order.sell.defasagem.1 + signal.defasagem.2 + n.trades.defasagem.2 + 
+    #last.price.defasagem.2 + weighted.price.defasagem.2 + period.ret.defasagem.2 + period.price.volat.defasagem.2 + 
+    #sum.qtd.defasagem.2 + sum.vol.defasagem.2 + n.buys.defasagem.2 + n.sells.defasagem.2 + time_opening.defasagem.2 + 
+    #vol.buys.defasagem.2 + vol.sells.defasagem.2 + weighted.price.buys.defasagem.2 + weighted.price.sells.defasagem.2 + MeanReturn.defasagem.2 +
+    #VarianceReturn.defasagem.2 + SkewnessReturn.defasagem.2 + KurtosisReturn.defasagem.2 + n.order.buy.defasagem.2 + 
+    #avg.order.price.buy.defasagem.2 + max.order.price.buy.defasagem.2 + min.order.price.buy.defasagem.2 + n.new.order.buy.defasagem.2 + 
+    #n.update.order.buy.defasagem.2 + n.cancelled.order.buy.defasagem.2 + n.order.sell.defasagem.2 + avg.order.price.sell.defasagem.2 +
+    #max.order.price.sell.defasagem.2 + min.order.price.sell.defasagem.2 + n.new.order.sell.defasagem.2 + n.update.order.sell.defasagem.2 + 
+    #n.cancelled.order.sell.defasagem.2 + signal.defasagem.3 + n.trades.defasagem.3 + last.price.defasagem.3 + weighted.price.defasagem.3 + 
+    #period.ret.defasagem.3 + period.price.volat.defasagem.3 + sum.qtd.defasagem.3 + sum.vol.defasagem.3 + n.buys.defasagem.3 + 
+    #n.sells.defasagem.3 + time_opening.defasagem.3+ vol.buys.defasagem.3 + vol.sells.defasagem.3 + weighted.price.buys.defasagem.3 + weighted.price.sells.defasagem.3 + 
+    #MeanReturn.defasagem.3 + VarianceReturn.defasagem.3 + SkewnessReturn.defasagem.3 + KurtosisReturn.defasagem.3 + 
+    #n.order.buy.defasagem.3 + avg.order.price.buy.defasagem.3 + max.order.price.buy.defasagem.3 + min.order.price.buy.defasagem.3 + 
+    #n.new.order.buy.defasagem.3 + n.update.order.buy.defasagem.3 + n.cancelled.order.buy.defasagem.3 + n.order.sell.defasagem.3 + 
+    #avg.order.price.sell.defasagem.3 + max.order.price.sell.defasagem.3 + min.order.price.sell.defasagem.3 + n.new.order.sell.defasagem.3 + 
+    #n.update.order.sell.defasagem.3 + n.cancelled.order.sell.defasagem.3 + signal.defasagem.4 + n.trades.defasagem.4 + last.price.defasagem.4 +
+    #weighted.price.defasagem.4 + period.ret.defasagem.4 + period.price.volat.defasagem.4 + sum.qtd.defasagem.4 + sum.vol.defasagem.4)
+    
+    
+    
+    
+    #head(model.matrix(f1, train.logit))
+    #head(model.frame.default(f1, train.logit, lhs = NULL, rhs = NULL))
+    #logit_estimado<-mlogit(formula=f1,data=train.logit,ftol=1e-30,gtol=1e-30)
+    
+    rm(final_product)
   }
+}
 }  #Fazer estimação
 
 
