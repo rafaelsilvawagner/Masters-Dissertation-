@@ -27,9 +27,6 @@ library(doParallel)
 library(SDMTools)
 registerDoParallel()
 
-packages=c("GetHFData","plyr","dplyr","lubridate","Weighted.Desc.Stat","chron","highfrequency","ggplot2",
-           "data.table","xgboost","glmnet","caret","mlogit","zoo","foreach","doParallel","SDMTools"
-)
 
 #Defina os ativos e o tipo de mercado que você irá analisar
 assets=c("PETR4")
@@ -58,6 +55,8 @@ tipo_agregacao="mins"
 agregacao_minima<-sprintf("1 %s",tipo_agregacao)
 #salto é a agregacao_minima em segundos
 salto=60
+#define o numero de defasagens
+num_defs<-2
 
 
 #######Cria as matrizes que vão guardar as informações de análise
@@ -89,7 +88,7 @@ cross_validation<-1:200
 asset<-assets[1]
 #faz pra uma dada agregação
 #agregacoes<-1:agregacao_maxima
-agregacoes<-23:23
+agregacoes<-1:agregacao_maxima
 for(agregacao in agregacoes){
   if(file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//bases//base %s.csv",agregacao))){
     final_product<-read.csv(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//bases//base %s.csv",agregacao))
@@ -444,7 +443,7 @@ for(agregacao in agregacoes){
       signal <- as.numeric(cut(para_defasar$period.ret,breaks=c(-Inf,-intervalo,intervalo,Inf),labels=c(0,1,2))) # multinomial signal
       dados<-cbind(signal,para_defasar)
       # matriz de regressores defasados
-      max.lags <- 3
+      max.lags <- num_defs-1
       
       
       defasada<-dados[(max.lags*agregacao+1):(nrow(dados)-agregacao),]
@@ -480,16 +479,34 @@ for(agregacao in agregacoes){
     
     write.csv(final_product,sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//bases//base %s.csv",agregacao))
     #retira o symbolo a data da sessão e o horarios
-    preco_futuro<-final_product[,1]
-    treinar<-final_product[,-1]
     
-    # Define dados de treino (50%) e validação (50%)
-    train <- 1:round(0.8*nrow(treinar))
+    preco_futuro<-final_product
+    treinar<-final_product[,-c(1)]
+    
+    # Define dados de treino (80% dos primeiros dias)
+    dias_treino<-dates[(length(dates)*0.2):length(dates)]
+    
+    
+    train<-!is.na(match(as.Date(row.names(treinar)),dias_treino))
     train.reg <- as.matrix(treinar[train,-1])
-    
     train.signal <- as.matrix(treinar[train,1])-1
-    valid.reg <- as.matrix(treinar[-train,-1])
-    valid.signal <- as.matrix(treinar[-train,1])-1
+    
+    #O conjunto de validação estará padronizado por agregacao_maxima de maneira que todos os conjuntos
+    #de defasagens estejam prevendo a mesma coisa
+    #para isso vamos descobrir a primeira ocorrência de cada um dos valores
+    dias_teste<-dates[1:((length(dates)*0.2)-1)]
+    valid<-preco_futuro[!train,]
+    
+    
+    for (i in 1:length(dias_teste)){
+        prim_prev<-as.POSIXct(row.names(valid)[min(which(as.Date(row.names(valid)) == dias_teste[i]))])-60*(agregacao-60*(num_defs+1))
+        valid<-valid[as.Date(row.names(valid))!=dias_teste[i]|(as.Date(row.names(valid))==dias_teste[i] & as.POSIXct(row.names(valid))>prim_prev),]
+    }
+    
+    
+    preco_futuro<-cbind(row.names(valid),as.numeric(valid[,1]))
+    valid.reg <- as.matrix(valid[,-c(1,2)])
+    valid.signal <- as.matrix(valid[,2])-1
     
     dtrain = xgb.DMatrix(data = train.reg, label = train.signal)
     
@@ -514,17 +531,19 @@ for(agregacao in agregacoes){
     
     
     cv<-(cv_model$evaluation_log$test_mlogloss_mean)
-    min<-which(min(cv)==cv)
-    dp<-cv_model$evaluation_log$test_mlogloss_std[min]
+    min<-min(cv)
+    dp<-cv_model$evaluation_log$test_mlogloss_std[which(min(cv)==cv)]
     best<-which.max(cv < (min+dp))
-    cross_validation<-cbind(cross_validation,cv_model$evaluation_log$test_mlogloss_mean)
-    best<-first((min+dp)!=(cv_model$evaluation_log$test_mlogloss_mean))
+    
+    #cross_validation<-cbind(cross_validation,cv_model$evaluation_log$test_mlogloss_mean)
+    #best<-first((min+dp)!=(cv_model$evaluation_log$test_mlogloss_mean))
     
     #plot(as.ts(cbind(cv_model$evaluation_log$train_mlogloss_mean,cv_model$evaluation_log$test_mlogloss_mean)))
     
     OOF_prediction <- data.frame(cv_model$pred) %>%
       mutate(max_prob = max.col(., ties.method = "last"),
              label = as.numeric(train.signal) + 1)
+    
     #head(OOF_prediction)
     
     
@@ -532,6 +551,7 @@ for(agregacao in agregacoes){
     confusionMatrix(factor(OOF_prediction$label), 
                     factor(OOF_prediction$max_prob),
                     mode = "everything")
+    
     
     
     ####
@@ -546,6 +566,7 @@ for(agregacao in agregacoes){
                         nround = best)
     xgboost.predict <- predict(xgModel, valid.reg)
     
+    
     test_prediction <- matrix(xgboost.predict, nrow = numberOfClasses,
                               ncol=length(xgboost.predict)/numberOfClasses) %>%
       t() %>%
@@ -554,6 +575,7 @@ for(agregacao in agregacoes){
              max_prob = max.col(., "last"))
     
     predicted = test_prediction$max_prob 
+    
     reference = test_prediction$label 
     
     u = union(reference,predicted)
@@ -561,10 +583,10 @@ for(agregacao in agregacoes){
     c <- confusionMatrix(t,mode="everything")
     
     
-
+    
     names(c)
     c$table
-    #print(c)
+    print(c)
     names <-  colnames(train.reg)
     importance_matrix = xgb.importance(feature_names = names, model = xgModel)
     gp = xgb.plot.importance(importance_matrix)
