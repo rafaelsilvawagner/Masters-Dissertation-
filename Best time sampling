@@ -27,25 +27,25 @@ library(doParallel)
 library(SDMTools)
 registerDoParallel()
 
-GetHFData
-plyr
-dplyr
-lubridate)
-Weighted.Desc.Stat
-chron
-e1071
-highfrequency)
-ggplot2)
-tictoc)
-data.table)
-xgboost)
-glmnet)
-caret)
-mlogit)
-zoo)
-foreach)
-doParallel)
-SDMTools)
+packagess<-c("GetHFData",
+"plyr",
+"dplyr",
+"lubridate",
+"Weighted.Desc.Stat",
+"chron",
+"e1071",
+"highfrequency",
+"ggplot2",
+"tictoc",
+"data.table",
+"xgboost",
+"glmnet",
+"caret",
+"mlogit",
+"zoo",
+"foreach",
+"doParallel",
+"SDMTools")
 
 
 #Defina os ativos e o tipo de mercado que você irá analisar
@@ -110,8 +110,7 @@ asset<-assets[1]
 #agregacoes<-1:agregacao_maxima
 agregacoes<-1:agregacao_maxima
 #agregacao=10
-foreach(agregacao=agregacoes, .packages='GetHFData') %dopar% 
-for(agregacao in agregacoes){
+foreach(agregacao=agregacoes, .packages=packagess) %dopar% {
   if(file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//bases//base %s.csv",agregacao))){
     final_product<-read.csv(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//Artigo André//bases//base %s.csv",agregacao))
     datas<-final_product[,1]
