@@ -405,7 +405,7 @@ foreach(agregacao=agregacoes, .packages=packagess) %dopar% {
                                 OrderDatetime>book_agg$OrderDatetime[1]-agregacao*salto &
                                 type.order=="Sell")
           
-          book_agg$n.order.sell[1]<--sum(subcon_sell$n.order)
+          book_agg$n.order.sell[1]<-sum(subcon_sell$n.order)
           book_agg$n.new.order.sell[1]<-sum(subcon_sell$n.new.order)
           book_agg$n.update.order.sell[1]<-sum(subcon_sell$n.update.order)
           book_agg$n.cancelled.order.sell[1]<-sum(subcon_sell$n.cancelled.order)
