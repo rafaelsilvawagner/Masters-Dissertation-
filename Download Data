@@ -1,12 +1,9 @@
 library(GetHFData)
-library(foreach)
-library(doParallel)
-registerDoParallel()
+
 
 #define the inputs for the assets
 #define that i want the stock VALE 5 in a dataframe separated by 5 minutes
 assets=c("PETR4")
-#c("PETR4","KROT3","UGPA3","VALE5","BBDC4","BVMF3","BBAS3","ITSA4","BRFS3","ABEV3")
 time="1 sec"
 type.market="equity"
 #the negotiation starts at 10:00:00 and ends at 17:00:00
@@ -15,55 +12,55 @@ last.time <- '17:00:00'
 #get all available dates in Bovespa ftp for the equity market
 contents<-ghfd_get_ftp_contents(type.market="equity")
 #Define the period of your data.frame i want 50 trading days
-last.date<-contents[1]
-first.date<-contents[length(contents)]
-contents<-ghfd_get_ftp_contents(type.market="equity")
+last.date<-tail(contents$dates,1)
+first.date<-contents$dates[1]
+
 
 
 ##seria a função
-round_asset<-length(assets)
 
-foreach(j in 1:round_asset, .packages='GetHFData') %dopar% {
+round_asset<-length(assets)
+for (j in 1:round_asset){
   asset<-assets[j]
-  number_of_rounds<-nrow(contents)
-  dates<-contents$dates
+  
+  contents<-ghfd_get_ftp_contents(type.market="equity")
+  number_of_rounds<-which(contents$dates == last.date)-which(contents$dates == first.date)
+  dates<-contents$dates[which(contents$dates == last.date):which(contents$dates == first.date)]
   h<-0
   for(round in 1:number_of_rounds) {
     date<-dates[round]
     if(file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//times and trades//agg//%s//%s//%s.csv",time,asset,date))){
-      trades_agg <- read.csv(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables///times and trades//agg//%s//%s//%s.csv",time,asset,date),header=TRUE)
+      trades_agg <- read.csv(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//times and trades//agg//%s//%s//%s.csv",time,asset,date),header=TRUE)
       trades_agg<- trades_agg[1:nrow(trades_agg)-1,2:ncol(trades_agg)]
     } else {trades_agg<-ghfd_get_HF_data(my.assets=asset,type.market=type.market,type.data="trades",
                                          first.date=date,last.date=date,type.output="agg",agg.diff = time,
                                          first.time =first.time,last.time =last.time,
                                          dl.dir = "C://Users//Usuario//Desktop//Rafael - Dissertação//ftp.bmf.com.br//MarketData//Bovespa-Vista")
-    write.csv(trades_agg,sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables///times and trades//agg//%s//%s//%s.csv",time,asset,date))
+    write.csv(trades_agg,sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//times and trades//agg//%s//%s//%s.csv",time,asset,date))
     }
     rm(trades_agg)
     #Get trades data aggregated
-    if(file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables///times and trades//raw//%s//%s//%s.csv",time,asset,date))){
-      trades_raw <- read.csv(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables///times and trades//raw//%s//%s//%s.csv",time,asset,date))
+    if(file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//times and trades//raw//%s//%s//%s.csv",time,asset,date))){
+      trades_raw <- read.csv(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//times and trades//raw//%s//%s//%s.csv",time,asset,date))
       trades_raw<-trades_raw[,2:ncol(trades_raw)]
     } else {trades_raw<-ghfd_get_HF_data(my.assets=asset,type.market=type.market,type.data="trades",
                                          first.date=date,last.date=date,type.output="raw",agg.diff = time,
                                          first.time =first.time,last.time =last.time,
                                          dl.dir = "C://Users//Usuario//Desktop//Rafael - Dissertação//ftp.bmf.com.br//MarketData//Bovespa-Vista")
-    write.csv(trades_raw,sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables///times and trades//raw//%s//%s//%s.csv",time,asset,date))
+    write.csv(trades_raw,sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//times and trades//raw//%s//%s//%s.csv",time,asset,date))
     }
     
     rm(trades_raw)
     
-    if(file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables///book//agg//%s//%s//%s.csv",time,asset,date))){
-      book_agg <- read.csv(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables///book//agg//%s//%s//%s.csv",time,asset,date),header=TRUE)
+    if(file.exists(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//book//agg//%s//%s//%s.csv",time,asset,date))){
+      book_agg <- read.csv(sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//book//agg//%s//%s//%s.csv",time,asset,date),header=TRUE)
     } else {book_agg<-ghfd_get_HF_data(my.assets=asset,type.market=type.market,type.data="orders",
                                        first.date=date,last.date=date,type.output="agg",agg.diff=time,
                                        first.time =first.time,last.time =last.time,
-                                       dl.dir = "C://Users//Usuario//Desktop//Rafael - Dissertação//ftp.bmf.com.br/MarketData//Bovespa-Vista")
-    write.csv(book_agg,sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables///book//agg//%s//%s//%s.csv",time,asset,date))
+                                       dl.dir = "C://Users//Usuario//Desktop//Rafael - Dissertação//ftp.bmf.com.br//MarketData//Bovespa-Vista")
+    write.csv(book_agg,sprintf("C://Users//Usuario//Desktop//Rafael - Dissertação//treated_variables//book//agg//%s//%s//%s.csv",time,asset,date))
     
     rm(book_agg)
     }
   }
 }
-
-
